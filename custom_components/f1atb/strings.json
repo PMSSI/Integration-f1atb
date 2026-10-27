@@ -10,8 +10,12 @@
         }
       }
     },
-    "error": { "cannot_connect": "Cannot connect to the router." },
-    "abort": { "already_configured": "This router is already configured." }
+    "error": {
+      "cannot_connect": "Cannot connect to the router."
+    },
+    "abort": {
+      "already_configured": "This router is already configured."
+    }
   },
   "options": {
     "step": {
@@ -20,7 +24,9 @@
         "data": {
           "language": "Language of entity names and of the card",
           "scan_interval": "Polling interval (s)",
-          "force_minutes": "Duration of a forced on/off (minutes)"
+          "force_minutes": "Duration of a forced on/off (minutes)",
+          "tank_volume": "Hot-water tank volume (L, 0 = no tank model)",
+          "tank_setpoint": "Tank thermostat set point (°C)"
         }
       }
     }
@@ -31,6 +37,18 @@
         "auto": "Automatic (Home Assistant language)",
         "fr": "Français",
         "en": "English"
+      }
+    }
+  },
+  "services": {
+    "set_tank_charge": {
+      "name": "Set tank charge",
+      "description": "Correct the estimated charge of the hot-water tank (e.g. 100 when you know it is full).",
+      "fields": {
+        "percent": {
+          "name": "Charge",
+          "description": "Charge in percent (0 = cold water, 100 = set point)."
+        }
       }
     }
   }

@@ -1,13 +1,17 @@
 """F1ATB Solar Router integration (official firmware, local HTTP API)."""
 from __future__ import annotations
 
+from datetime import timedelta
 import logging
 from pathlib import Path
 
+import voluptuous as vol
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.loader import async_get_integration
 
 from .api import F1atbApiError, F1atbClient
@@ -23,6 +27,7 @@ PLATFORMS = [
     Platform.BUTTON,
 ]
 CARD_URL = f"/{DOMAIN}/f1atb-card.js"
+SERVICE_SET_TANK_CHARGE = "set_tank_charge"
 
 
 async def _register_card(hass: HomeAssistant) -> None:
@@ -71,9 +76,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    if coordinator.tank is not None:
+        await coordinator.async_tank_load()
+        entry.async_on_unload(
+            async_track_time_interval(hass, coordinator.async_tank_tick, timedelta(minutes=1))
+        )
+        _register_services(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload))
     return True
+
+
+def _register_services(hass: HomeAssistant) -> None:
+    if hass.services.has_service(DOMAIN, SERVICE_SET_TANK_CHARGE):
+        return
+
+    async def _set_tank_charge(call: ServiceCall) -> None:
+        """Manual correction of the estimated tank charge (e.g. "it is full right now")."""
+        for coordinator in hass.data.get(DOMAIN, {}).values():
+            coordinator.tank_set_percent(call.data["percent"])
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SET_TANK_CHARGE,
+        _set_tank_charge,
+        schema=vol.Schema({vol.Required("percent"): vol.All(vol.Coerce(float), vol.Range(min=0, max=100))}),
+    )
 
 
 async def _async_reload(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -83,5 +111,7 @@ async def _async_reload(hass: HomeAssistant, entry: ConfigEntry) -> None:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id, None)
+        coordinator = hass.data[DOMAIN].pop(entry.entry_id, None)
+        if coordinator is not None:
+            await coordinator.async_tank_save()
     return unload_ok

@@ -8,7 +8,7 @@
  * copy this file to <config>/www/ and add the resource  /local/f1atb-card.js  (JavaScript module).
  * Then in a view, add a card:  type: custom:f1atb-card
  */
-const F1ATB_CARD_VERSION = "0.5.0";
+const F1ATB_CARD_VERSION = "0.6.0";
 
 const LOGO = `
 <svg viewBox="44 60 186 128" class="logo">
@@ -101,7 +101,7 @@ const I18N = {
     overrideLabels: ["Auto", "Marche forcée", "Arrêt forcé"],
     forcedPower: "Marche forcée à une puissance", clear: "Effacer", clearTitle: "Remettre à 0 (retour Auto)",
     maxPower: "Puissance max de l'appareil", calibrate: "⚙ Calibrer", calibrating: "Calibration…",
-    action: "Action", broken: "Carte F1ATB momentanément indisponible.",
+    action: "Action", broken: "Carte F1ATB momentanément indisponible.", tank: "Ballon",
   },
   en: {
     router: "F1ATB router", unavailable: "Unavailable", online: "Online", offline: "Offline",
@@ -114,7 +114,7 @@ const I18N = {
     overrideLabels: ["Auto", "Forced on", "Forced off"],
     forcedPower: "Forced on at a given power", clear: "Clear", clearTitle: "Reset to 0 (back to auto)",
     maxPower: "Appliance max power", calibrate: "⚙ Calibrate", calibrating: "Calibrating…",
-    action: "Action", broken: "F1ATB card temporarily unavailable.",
+    action: "Action", broken: "F1ATB card temporarily unavailable.", tank: "Tank",
   },
 };
 const OVERRIDE_CLS = ["", "marche", "arret"]; // by option index: auto, forced on, forced off
@@ -263,6 +263,16 @@ class F1atbCard extends HTMLElement {
         <div class="v">${FMT(v, 0)}<small>${unit}</small></div></div>`;
     };
 
+    // Hot-water tank model (optional): charge % and litres at 40 °C still available
+    let tankHtml = "";
+    const tankS = globals.tank_charge ? this._st(globals.tank_charge) : null;
+    if (OK(tankS)) {
+      const waterS = globals.tank_hot_water ? this._st(globals.tank_hot_water) : null;
+      const litres = OK(waterS) ? ` · ${FMT(Number(waterS.state), 0)} L` : "";
+      tankHtml = `<div class="kpi"><div class="l"><span class="tag" style="background:var(--relais)"></span>${t.tank}</div>
+        <div class="v">${FMT(Number(tankS.state), 0)}<small>%${litres}</small></div></div>`;
+    }
+
     // Temperatures (configured channels): chips sorted by channel
     const tempEids = eids.filter((e) => meta[e].kind === "temperature")
       .sort((a, b) => (meta[a].ch || 0) - (meta[b].ch || 0));
@@ -359,6 +369,7 @@ class F1atbCard extends HTMLElement {
           ${kpi("grid_import_power", t.grid_import, "--imp", "W")}
           ${kpi("grid_export_power", t.grid_export, "--exp", "W")}
           ${kpi("routed_power", t.routed, "--triac", "W")}
+          ${tankHtml}
         </div>
         ${tempHtml}
         ${actionsHtml}

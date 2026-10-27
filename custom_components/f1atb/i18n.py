@@ -34,6 +34,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "force_on": "Forcé Marche",
         "force_off": "Forcé Arrêt",
         "energy_method": "intégration de la puissance (HA)",
+        "tank_charge": "Charge ballon",
+        "tank_energy": "Énergie stockée ballon",
+        "tank_hot_water": "Eau chaude disponible (40 °C)",
+        "tank_full": "Ballon plein détecté",
         "calib_title": "F1ATB — calibration sans effet",
         "calib_message": (
             "La calibration de **{action}** n'a mesuré **aucune puissance routée**.\n\n"
@@ -71,6 +75,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "force_on": "Forced on",
         "force_off": "Forced off",
         "energy_method": "power integration (HA)",
+        "tank_charge": "Tank charge",
+        "tank_energy": "Tank stored energy",
+        "tank_hot_water": "Hot water available (40 °C)",
+        "tank_full": "Tank full detected",
         "calib_title": "F1ATB — calibration had no effect",
         "calib_message": (
             "Calibrating **{action}** measured **no routed power**.\n\n"

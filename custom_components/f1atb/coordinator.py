@@ -13,12 +13,25 @@ import logging
 
 from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .api import F1atbApiError, F1atbClient
-from .const import CONF_LANGUAGE, FAILURES_BEFORE_OFFLINE, LANGUAGE_AUTO
+from .const import (
+    CONF_LANGUAGE,
+    CONF_TANK_SETPOINT,
+    CONF_TANK_VOLUME,
+    DEFAULT_TANK_SETPOINT,
+    DEFAULT_TANK_VOLUME,
+    DOMAIN,
+    FAILURES_BEFORE_OFFLINE,
+    LANGUAGE_AUTO,
+)
 from .i18n import resolve_language, tr
+from .water_heater import FULL_OPENING_MIN, TankModel
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -57,9 +70,77 @@ class F1atbCoordinator(DataUpdateCoordinator[dict]):
         self._calibrating: set[int] = set()
         self._config_countdown = 0
         self._failures = 0
+        # Optional hot-water tank model, stepped every minute (also while the router is off).
+        volume = float(entry.options.get(CONF_TANK_VOLUME, DEFAULT_TANK_VOLUME) or 0)
+        self.tank: TankModel | None = (
+            TankModel(volume, float(entry.options.get(CONF_TANK_SETPOINT, DEFAULT_TANK_SETPOINT)))
+            if volume > 0 else None
+        )
+        self._tank_store: Store[dict] = Store(hass, 1, f"{DOMAIN}.tank.{entry.entry_id}")
+        self._tank_meter: float | None = None  # last lifetime meter reading (Wh)
 
     def tr(self, key: str, **kwargs) -> str:
         return tr(self.language, key, **kwargs)
+
+    # ------------------------------------------------------------------ hot-water tank
+    @property
+    def tank_signal(self) -> str:
+        return f"{DOMAIN}_tank_{self.entry.entry_id}"
+
+    async def async_tank_load(self) -> None:
+        if self.tank is None:
+            return
+        stored = await self._tank_store.async_load()
+        if stored:
+            try:
+                self.tank.restore(stored)
+            except (TypeError, ValueError) as err:
+                _LOGGER.warning("Tank model state not restored: %s", err)
+            # Home Assistant was stopped meanwhile: catch up with losses and draws only (the
+            # heating during the gap is unknown; the next full tank re-anchors the model).
+            self.tank.step(dt_util.now(), 0.0, False)
+
+    async def async_tank_save(self) -> None:
+        if self.tank is not None:
+            await self._tank_store.async_save(self.tank.to_dict())
+
+    @callback
+    def async_tank_tick(self, _now=None) -> None:
+        """Advance the tank model by one step (every minute)."""
+        if self.tank is None:
+            return
+        data = self.data or {}
+        online = bool(self.last_update_success and data)
+        power = float(data.get("routed_power") or 0.0) if online else 0.0
+        openings = [a.get("opening") or 0 for a in (data.get("actions") or {}).values()]
+        wants = online and bool(openings) and max(openings) >= FULL_OPENING_MIN
+
+        # Energy actually delivered since the last step, from the lifetime meter; rejected when
+        # implausible (router reboot glitch, more than 4 kW on average) → fall back to the power.
+        energy_wh = None
+        meter = data.get("routed_energy_total") if online else None
+        now = dt_util.now()
+        if meter is not None and self._tank_meter is not None and self.tank.last_update:
+            delta = meter - self._tank_meter
+            hours = (now - self.tank.last_update).total_seconds() / 3600
+            if hours > 0 and 0 <= delta <= 4000 * hours:
+                energy_wh = delta
+        self._tank_meter = meter if meter is not None else self._tank_meter
+        if not online:
+            self._tank_meter = None  # power is 0 while offline; restart the meter delta on return
+
+        if self.tank.step(now, power, wants, energy_wh):
+            _LOGGER.debug("Hot-water tank full (thermostat cut detected), usage %.1f L/day",
+                          self.tank.usage_l_day)
+        self._tank_store.async_delay_save(self.tank.to_dict, 300)
+        # Only the tank entities are refreshed (not every coordinator listener).
+        async_dispatcher_send(self.hass, self.tank_signal)
+
+    def tank_set_percent(self, percent: float) -> None:
+        if self.tank is not None:
+            self.tank.set_percent(dt_util.now(), percent)
+            self._tank_store.async_delay_save(self.tank.to_dict, 5)
+            async_dispatcher_send(self.hass, self.tank_signal)
 
     def is_calibrating(self, index: int) -> bool:
         return index in self._calibrating

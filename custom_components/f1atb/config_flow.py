@@ -25,8 +25,12 @@ from .const import (
     CONF_HOST,
     CONF_LANGUAGE,
     CONF_SCAN_INTERVAL,
+    CONF_TANK_SETPOINT,
+    CONF_TANK_VOLUME,
     DEFAULT_FORCE_MINUTES,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_TANK_SETPOINT,
+    DEFAULT_TANK_VOLUME,
     DOMAIN,
     LANGUAGE_AUTO,
     LANGUAGES,
@@ -89,7 +93,7 @@ class F1atbConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class F1atbOptionsFlow(OptionsFlow):
-    """Options: language, polling interval, duration of a forced on/off."""
+    """Options: language, polling interval, forced on/off duration, hot-water tank model."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -113,6 +117,14 @@ class F1atbOptionsFlow(OptionsFlow):
                         CONF_FORCE_MINUTES,
                         default=opts.get(CONF_FORCE_MINUTES, DEFAULT_FORCE_MINUTES),
                     ): vol.All(vol.Coerce(int), vol.Range(min=1, max=1440)),
+                    vol.Optional(
+                        CONF_TANK_VOLUME,
+                        default=opts.get(CONF_TANK_VOLUME, DEFAULT_TANK_VOLUME),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=0, max=2000)),
+                    vol.Optional(
+                        CONF_TANK_SETPOINT,
+                        default=opts.get(CONF_TANK_SETPOINT, DEFAULT_TANK_SETPOINT),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=40, max=85)),
                 }
             ),
         )

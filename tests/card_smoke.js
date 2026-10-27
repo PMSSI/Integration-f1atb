@@ -76,6 +76,16 @@ c._pointer = false; c._flush();
 expect(c._root.innerHTML.includes("Waveform"), "pending render flushed");
 console.log("ok pointer guard");
 
+// Tank model tile
+const ht = hassFor("fr", { stamp: "t9" });
+ht.states["sensor.routeur_solaire_charge_ballon"] = { entity_id: "sensor.routeur_solaire_charge_ballon", state: "85.2", last_updated: "t9a", attributes: { f1atb_kind: "tank_charge" } };
+ht.states["sensor.routeur_solaire_eau_chaude"] = { entity_id: "sensor.routeur_solaire_eau_chaude", state: "463", last_updated: "t9b", attributes: { f1atb_kind: "tank_hot_water" } };
+ht.entities["sensor.routeur_solaire_charge_ballon"] = { platform: "f1atb" };
+ht.entities["sensor.routeur_solaire_eau_chaude"] = { platform: "f1atb" };
+c = new Card(); c.setConfig({}); c.hass = ht;
+expect(c._root.innerHTML.includes("Ballon") && c._root.innerHTML.includes("85<small>% · 463 L"), "tank tile");
+console.log("ok tank tile");
+
 // No entity at all
 c = new Card(); c.setConfig({}); c.hass = { states: {}, entities: {}, devices: {}, language: "fr" };
 expect(c._root.innerHTML.includes("Le routeur ne répond pas"), "empty state");

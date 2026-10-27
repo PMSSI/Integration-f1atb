@@ -17,8 +17,10 @@ from homeassistant.const import (
     UnitOfEnergy,
     UnitOfPower,
     UnitOfTemperature,
+    UnitOfVolume,
 )
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 from homeassistant.util import dt as dt_util
@@ -31,6 +33,7 @@ from .helpers import (
     temp_channel_indices,
     temp_channel_retained,
 )
+from .water_heater import cold_water_temp
 
 # Beyond this gap between two samples (HA restart, router switched off) the interval is not
 # integrated: the period is skipped instead of inventing energy.
@@ -78,6 +81,12 @@ async def async_setup_entry(
     entities: list = [F1atbGlobalSensor(coordinator, desc) for desc in GLOBAL_SENSORS]
     entities.append(F1atbRoutedTotalSensor(coordinator))
     entities.append(F1atbRoutedTodaySensor(coordinator))
+    if coordinator.tank is not None:
+        entities += [
+            TankChargeSensor(coordinator),
+            TankEnergySensor(coordinator),
+            TankHotWaterSensor(coordinator),
+        ]
     async_add_entities(entities)
 
     # Opening % per active action (dynamic)
@@ -353,3 +362,105 @@ class OpeningSensor(F1atbActionEntity, SensorEntity):
     def native_value(self) -> float | None:
         a = self._action
         return None if a is None else a.get("opening")
+
+
+class _TankSensor(F1atbBaseEntity, SensorEntity):
+    """Hot-water tank model output. Refreshed every minute, available while the router is off."""
+
+    _key = ""
+
+    def __init__(self, coordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.unique_id}_{self._key}"
+
+    @property
+    def name(self) -> str:
+        return self.coordinator.tr(self._key)
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.tank is not None and self.coordinator.tank.energy is not None
+
+    @property
+    def _doy(self) -> int:
+        return dt_util.now().timetuple().tm_yday
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            async_dispatcher_connect(self.hass, self.coordinator.tank_signal, self.async_write_ha_state)
+        )
+
+
+class TankChargeSensor(_TankSensor):
+    """Estimated charge of the hot-water tank (0 % = cold water, 100 % = set point)."""
+
+    _key = "tank_charge"
+    _attr_icon = "mdi:water-boiler"
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 0
+
+    @property
+    def native_value(self) -> float | None:
+        pct = self.coordinator.tank.percent(self._doy)
+        return None if pct is None else round(pct, 1)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        tank = self.coordinator.tank
+        doy = self._doy
+        last = tank.last_full
+        return {
+            "f1atb_kind": "tank_charge",
+            "capacity_kwh": round(tank.capacity(doy), 2),
+            "cold_water_c": round(cold_water_temp(doy), 1),
+            "setpoint_c": tank.setpoint_c,
+            "volume_l": tank.volume_l,
+            "usage_l_day_40c": round(tank.usage_l_day_at(doy), 0),
+            "losses_kwh_day": tank.loss_kwh_day,
+            "last_full": last.isoformat() if last else None,
+            "hours_since_full": (
+                round((dt_util.now() - last).total_seconds() / 3600, 1) if last else None
+            ),
+        }
+
+
+class TankEnergySensor(_TankSensor):
+    """Heat stored in the tank above the cold-water temperature."""
+
+    _key = "tank_energy"
+    _attr_icon = "mdi:thermometer-water"
+    _attr_device_class = SensorDeviceClass.ENERGY_STORAGE
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+
+    @property
+    def native_value(self) -> float | None:
+        energy = self.coordinator.tank.energy
+        return None if energy is None else round(energy, 2)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {"f1atb_kind": "tank_energy"}
+
+
+class TankHotWaterSensor(_TankSensor):
+    """Litres of water at 40 °C (mixed with cold water) the stored heat can still deliver."""
+
+    _key = "tank_hot_water"
+    _attr_icon = "mdi:shower-head"
+    _attr_device_class = SensorDeviceClass.VOLUME_STORAGE
+    _attr_native_unit_of_measurement = UnitOfVolume.LITERS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 0
+
+    @property
+    def native_value(self) -> float | None:
+        litres = self.coordinator.tank.litres_at(self._doy)
+        return None if litres is None else round(litres)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {"f1atb_kind": "tank_hot_water"}

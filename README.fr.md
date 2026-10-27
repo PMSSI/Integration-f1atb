@@ -106,6 +106,7 @@ Accessibles via **Configurer** sur l'intégration :
 - **Langue** des noms d'entités et de la carte : *Automatique* (langue de Home Assistant), *Français* ou *English*.
   Aussi proposée à l'ajout de l'intégration.
 - **Intervalle d'interrogation** (défaut **5 s**) — plus court = détection plus rapide, plus de trafic.
+- **Ballon d'eau chaude** : volume en litres (0 = pas de modèle) et consigne du thermostat (°C), voir plus bas.
 - **Durée d'un forçage** en minutes (défaut **720** = 12 h) — durée appliquée lorsqu'on choisit
   « Marche forcée » / « Arrêt forcé » ; le firmware décompte puis repasse en Auto.
 
@@ -159,6 +160,32 @@ Plutôt que de raisonner en pourcentage d'ouverture, vous indiquez directement *
 
 > 💡 Calibrez quand l'appareil peut réellement consommer (ex. chauffe-eau froid) pour mesurer sa vraie
 > puissance. La relation puissance/ouverture est supposée linéaire (approximation suffisante en pratique).
+
+---
+
+## 🛁 Modèle du ballon d'eau chaude (optionnel)
+
+Sans sonde de température : indiquez le **volume du ballon** (et la **consigne** du thermostat) dans les options,
+et l'intégration estime la **charge du ballon** à partir de ce que mesure le routeur.
+
+- **Énergie entrante** : l'énergie réellement routée vers le chauffe-eau (compteur, minute par minute).
+- **Ballon plein** : le routeur veut router (ouverture ≥ 10 %, donc surplus ou marche forcée) mais le
+  chauffe-eau ne consomme rien pendant 3 minutes → le thermostat a coupé → 100 %. Le modèle s'y recale.
+- **Énergie sortante** : pertes du ballon (≈ 0,6 kWh par 100 L et par jour, ballon plein) et puisages d'eau
+  chaude répartis sur une journée type (matin, soir). La **température de l'eau froide suit la saison**
+  (≈ 9 °C en février, 19 °C en août) : la capacité du ballon et l'énergie de chaque litre varient dans l'année.
+- **Auto-apprentissage** : à chaque ballon plein, la consommation quotidienne est corrigée d'après la dérive
+  du modèle depuis le précédent ; il apprend tout seul la consommation du foyer.
+
+| Entité | Unité | Détail |
+|---|---|---|
+| **Charge ballon** | % | 0 % = eau froide, 100 % = consigne. Attributs : capacité, eau froide, consommation apprise, dernier plein |
+| **Énergie stockée ballon** | kWh | chaleur stockée au-dessus de l'eau froide |
+| **Eau chaude disponible (40 °C)** | L | eau à 40 °C (mitigée) encore disponible |
+| **Ballon plein détecté** | on/off | coupure du thermostat détectée : déclencheur fiable pour arrêter la chauffe |
+
+Le service **`f1atb.set_tank_charge`** (`percent`) corrige l'estimation à la main. Précision typique ±10 %
+entre deux ballons pleins ; plus le ballon est souvent plein, meilleure elle est.
 
 ---
 

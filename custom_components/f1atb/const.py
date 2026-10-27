@@ -11,6 +11,12 @@ CONF_LANGUAGE = "language"
 DEFAULT_SCAN_INTERVAL = 5  # seconds
 DEFAULT_FORCE_MINUTES = 720  # duration of a forced on/off, in minutes (12 h)
 
+# Hot-water tank model (0 L = disabled)
+CONF_TANK_VOLUME = "tank_volume"
+CONF_TANK_SETPOINT = "tank_setpoint"
+DEFAULT_TANK_VOLUME = 0
+DEFAULT_TANK_SETPOINT = 60
+
 LANGUAGE_AUTO = "auto"  # follow the Home Assistant language
 LANGUAGES = [LANGUAGE_AUTO, "fr", "en"]
 

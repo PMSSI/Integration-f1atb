@@ -1,0 +1,10 @@
+set_tank_charge:
+  fields:
+    percent:
+      required: true
+      example: 100
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"

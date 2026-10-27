@@ -105,6 +105,7 @@ From **Configure** on the integration:
   Changing it renames the entities (their entity IDs do not change). Select options are translated too:
   update automations that select an option by its text.
 - **Polling interval** (default **5 s**): shorter = faster detection, more traffic.
+- **Hot-water tank**: volume in litres (0 = no model) and thermostat set point (°C), see below.
 - **Duration of a forced on / off** in minutes (default **720** = 12 h): applied when choosing
   "Forced on" / "Forced off"; the firmware counts down, then goes back to auto.
 
@@ -162,6 +163,32 @@ Instead of an opening percentage, enter **the power to route** directly:
 
 ---
 
+## 🛁 Hot-water tank model (optional)
+
+No temperature probe needed: set the **tank volume** (and the thermostat **set point**) in the options and the
+integration estimates the **charge of the hot-water tank** from what the router measures.
+
+- **Heat in**: the energy actually routed to the heater (lifetime meter, minute by minute).
+- **Full tank**: the router wants to route (opening ≥ 10 %, i.e. surplus or forced on) but the heater draws
+  no power for 3 minutes → its thermostat has cut → the tank is at 100 %. The model re-anchors there.
+- **Heat out**: standing losses (≈ 0.6 kWh per 100 L per day when full) and hot-water draws, spread over a
+  typical day (mornings, evenings). The **cold-water temperature follows the season** (≈ 9 °C in February,
+  19 °C in August), so the tank capacity and the energy of each litre change through the year.
+- **Self-learning**: at every full tank, the daily hot-water usage is corrected from the drift since the
+  previous one, so the model learns the household consumption by itself.
+
+| Entity | Unit | Detail |
+|---|---|---|
+| **Tank charge** | % | 0 % = cold water, 100 % = set point. Attributes: capacity, cold-water temperature, learned usage, last full tank |
+| **Tank stored energy** | kWh | heat stored above the cold-water temperature |
+| **Hot water available (40 °C)** | L | water at 40 °C (mixed) the stored heat can still deliver |
+| **Tank full detected** | on/off | thermostat cut detected right now: a reliable trigger to stop heating |
+
+Service **`f1atb.set_tank_charge`** (`percent`) corrects the estimate by hand. Accuracy is typically within
+±10 % between two full tanks; the more often the tank gets full, the better it gets.
+
+---
+
 ## 🔎 How it works
 
 <p align="center">
@@ -203,7 +230,8 @@ exactly what the "Save" button of the router's web UI does.
 ## 🧪 Tests
 
 ```bash
-python tests/test_filters.py   # energy counter filter + translations, no Home Assistant needed
+python tests/test_filters.py        # energy counter filter + translations, no Home Assistant needed
+python tests/test_water_heater.py   # hot-water tank model
 node tests/card_smoke.js       # card rendering with a fake hass (FR / EN / unavailable / pointer guard)
 ```
 
