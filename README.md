@@ -1,209 +1,221 @@
 <p align="center">
-  <img src="docs/banner.png" alt="F1ATB Solar Router — intégration Home Assistant" width="100%">
+  <img src="docs/banner.png" alt="F1ATB Solar Router — Home Assistant integration" width="100%">
 </p>
 
 <p align="center">
   <a href="https://hacs.xyz/"><img src="https://img.shields.io/badge/HACS-Custom-41BDF5.svg" alt="HACS Custom"></a>
   <a href="https://github.com/PMSSI/Integration-f1atb/releases"><img src="https://img.shields.io/github/v/release/PMSSI/Integration-f1atb" alt="Release"></a>
-  <img src="https://img.shields.io/badge/Home%20Assistant-2024.4%2B-41BDF5?logo=home-assistant&logoColor=white" alt="Home Assistant">
+  <img src="https://img.shields.io/badge/Home%20Assistant-2024.8%2B-41BDF5?logo=home-assistant&logoColor=white" alt="Home Assistant">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a>
 </p>
 
-Intégration **Home Assistant** pour le [routeur solaire F1ATB](https://github.com/F1ATB/Solar-Router-F1ATB)
-(RMS / ESP32). Elle fonctionne avec le **firmware officiel, sans aucune modification** : tout se passe
-côté Home Assistant, en dialoguant avec le routeur via son **API HTTP locale** (`local_polling`, 100 % local,
-aucun cloud).
+> 🇫🇷 Version française : [README.fr.md](README.fr.md)
 
-L'intégration **lit** les mesures (puissances, énergies, ouverture du routage, système) **et pilote** le
-routage (forme d'onde, ouverture max, marche/arrêt forcés) — le tout accompagné d'une **carte Lovelace
-interactive** qui suit le thème de votre interface.
+**Home Assistant** integration for the [F1ATB solar router](https://github.com/F1ATB/Solar-Router-F1ATB)
+(RMS / ESP32). It works with the **official firmware, unmodified**: everything happens on the Home Assistant
+side, talking to the router through its **local HTTP API** (`local_polling`, 100 % local, no cloud).
+
+The integration **reads** the measurements (powers, energies, routing opening, system info) **and controls**
+the routing (waveform, max opening, forced on / off), with an **interactive Lovelace card** that follows
+your theme. Entity names and the card are available in **French or English** (chosen at setup).
 
 <table align="center">
   <tr>
-    <td align="center"><b>Thème clair</b></td>
-    <td align="center"><b>Thème sombre</b></td>
+    <td align="center"><b>Light theme</b></td>
+    <td align="center"><b>Dark theme</b></td>
   </tr>
   <tr>
-    <td><img src="docs/card-light.png" alt="Carte F1ATB — thème clair" width="360"></td>
-    <td><img src="docs/card-dark.png" alt="Carte F1ATB — thème sombre" width="360"></td>
+    <td><img src="docs/card-light.png" alt="F1ATB card — light theme" width="360"></td>
+    <td><img src="docs/card-dark.png" alt="F1ATB card — dark theme" width="360"></td>
   </tr>
 </table>
 
 ---
 
-## ✨ Points forts
+## ✨ Highlights
 
-- **100 % firmware officiel** — rien à flasher, rien à modifier sur le routeur.
-- **Entités dynamiques** — elles n'apparaissent **que pour les actions actives** ; une action passée
-  en « Inactif » (depuis HA *ou* l'interface web du routeur) voit ses entités disparaître automatiquement.
-- **Pilotage complet** de chaque action : forme d'onde, ouverture max, forçage marche/arrêt.
-- **Marche forcée à une puissance donnée (W)** — entrez la puissance à router, l'ouverture est calculée
-  automatiquement ; **calibration auto** de la puissance max de l'appareil en un clic (voir plus bas).
-- **Énergie fiable** — le « routé aujourd'hui » est recalculé depuis le **compteur cumulé à vie**, donc
-  **insensible aux redémarrages** du routeur (voir plus bas).
-- **Sondes de température** — les canaux configurés (jusqu'à 4 : DS18B20, externe ou MQTT) sont détectés
-  et exposés automatiquement, avec leur nom.
-- **Capteur de disponibilité** (`Connecté`) pour suivre quand le routeur est en marche.
-- **Carte Lovelace stylée**, chargée automatiquement, **thème clair/sombre** automatique.
-- **Local & rapide** — polling toutes les 5 s (configurable), aucune dépendance externe.
+- **100 % official firmware**: nothing to flash or change on the router.
+- **Dynamic entities**: created **only for active actions**. An action disabled (from HA *or* the router's
+  web UI) has its entities removed automatically.
+- **Full control** of each action: waveform, max opening, forced on / off.
+- **Forced on at a given power (W)**: enter the power to route, the opening is computed for you;
+  **one-click calibration** of the appliance max power.
+- **Reliable energy**: "routed today" is integrated from the routed power by HA, and the lifetime counter is
+  filtered so it never goes backwards when the router reboots (safe for the Energy dashboard).
+- **Temperature probes**: configured channels (up to 4: DS18B20, external or MQTT) are exposed with their name.
+- **Connectivity sensor** (`Connected`) to track when the router is running.
+- **Resilient**: a missed poll does not make everything unavailable; a briefly missing action keeps its entities.
+- **Styled Lovelace card**, loaded automatically, light / dark theme, French / English.
 
 ---
 
-## 📋 Entités
+## 📋 Entities
 
-### Par action active
+### Per active action
 
-| Entité | Type | Réglage | Écriture |
+| Entity | Type | Setting | Write |
 |---|---|---|---|
-| **Forme d'onde** | `select` | Inactif / Découpe (triac) ou On-Off (relais) / Demi-sinus / Multi-sinus / Train de sinus / PWM | `/ParaNew` — **persistant** |
-| **Ouverture max (Auto)** | `number` (0–100 %) | *(triac)* **plafond d'ouverture du routage automatique** (`Vmax`, toutes périodes) | `/ParaNew` — **persistant** |
-| **Ouverture (marche forcée)** | `number` (0–100 %) | ouverture appliquée **quand le routage est forcé en marche** (`ForceOuvre`) | `/ParaNew` — **persistant** |
-| **Forçage** | `select` | Auto / Marche forcée / Arrêt forcé | `/ForceAction` |
-| **Marche forcée (W)** | `number` (W) | puissance à router de force → ouverture calculée + marche forcée ; **0 = Auto** | `/ParaNew` + `/ForceAction` |
-| **Puissance max** | `number` (W) | calibration : puissance à 100 % d'ouverture (côté HA, saisie manuelle possible) | — (stocké dans HA) |
-| **Calibrer puissance max** | `button` | lance la mesure automatique de la puissance max | `/ForceAction` |
-| **Ouverture** | `sensor` (%) | ouverture instantanée du routage | lecture |
+| **Waveform** | `select` | Inactive / Phase cut (triac) or On-Off (relay) / Half-sine / Multi-sine / Sine train / PWM | `/ParaNew`, **persistent** |
+| **Max opening (auto)** | `number` (0–100 %) | **ceiling of the automatic routing** (`Vmax`, all periods). Unavailable for a relay in On/Off mode, where the firmware uses `Vmax` as a power threshold in W | `/ParaNew`, **persistent** |
+| **Forced-on opening** | `number` (0–100 %) | opening applied **while the routing is forced on** (`ForceOuvre`) | `/ParaNew`, **persistent** |
+| **Override** | `select` | Auto / Forced on / Forced off | `/ForceAction` |
+| **Forced-on power (W)** | `number` (W) | power to route → opening computed + forced on; **0 = auto** | `/ParaNew` + `/ForceAction` |
+| **Max power** | `number` (W) | calibration: power at 100 % opening (stored in HA, manual entry allowed) | (stored in HA) |
+| **Calibrate max power** | `button` | measures the max power automatically | `/ForceAction` |
+| **Opening** | `sensor` (%) | current routing opening | read |
 
-> L'index 0 correspond à la sortie **triac** (découpe de sinus) ; les index suivants aux **relais** (On/Off).
+> Index 0 is the **triac** output (phase cut); the following indices are the **relays** (On/Off).
 
-### Capteurs globaux (toujours présents)
+### Global sensors (always present)
 
-| Entité | Unité | Détail |
+| Entity | Unit | Detail |
 |---|---|---|
-| **Soutirée réseau** | W | puissance tirée du réseau |
-| **Injectée réseau** | W | puissance injectée vers le réseau |
-| **Puissance routée** | W | puissance envoyée vers la charge |
-| **Énergie routée aujourd'hui** | kWh | journalier **robuste** (cumulé − minuit), remis à zéro à minuit |
-| **Énergie routée totale** | kWh | compteur **à vie** — idéal pour le tableau de bord Énergie |
-| **Température** (× canaux configurés) | °C | une entité par canal (0–3) configuré sur le routeur (DS18B20 / externe / MQTT), avec son nom |
-| **Connecté** | on/off | connectivité du routeur (reste dispo même hors ligne) |
+| **Grid import** | W | power drawn from the grid |
+| **Grid export** | W | power fed into the grid |
+| **Routed power** | W | power sent to the load |
+| **Routed energy today** | kWh | computed by HA by **integrating the routed power**, reset at midnight |
+| **Routed energy total** | kWh | **lifetime** counter, filtered so it never goes backwards: use it in the Energy dashboard |
+| **Temperature** (× configured channels) | °C | one entity per channel (0–3) configured on the router, with its name |
+| **Connected** | on/off | router connectivity (stays available while offline) |
 
 ---
 
 ## 🚀 Installation (HACS)
 
-1. HACS → menu **⋮** → **Dépôts personnalisés**
-2. URL : `https://github.com/PMSSI/Integration-f1atb` — Catégorie : **Integration**
-3. **Télécharger** l'intégration, puis **redémarrer** Home Assistant
-4. **Paramètres → Appareils & services → Ajouter une intégration → F1ATB Solar Router**
-5. Saisir l'**adresse IP** du routeur (ex. `192.168.1.101`)
+1. HACS → **⋮** menu → **Custom repositories**
+2. URL: `https://github.com/PMSSI/Integration-f1atb`, category: **Integration**
+3. **Download** the integration, then **restart** Home Assistant
+4. **Settings → Devices & services → Add integration → F1ATB Solar Router**
+5. Enter the router's **IP address** (e.g. `192.168.1.101`) and choose the **language**
 
 <details>
-<summary>Installation manuelle (sans HACS)</summary>
+<summary>Manual installation (without HACS)</summary>
 
-Copiez le dossier `custom_components/f1atb/` dans le `config/custom_components/` de votre Home Assistant,
-redémarrez, puis ajoutez l'intégration comme ci-dessus.
+Copy `custom_components/f1atb/` into the `config/custom_components/` folder of your Home Assistant,
+restart, then add the integration as above.
 </details>
 
 ---
 
 ## ⚙️ Options
 
-Accessibles via **Configurer** sur l'intégration :
+From **Configure** on the integration:
 
-- **Intervalle d'interrogation** (défaut **5 s**) — plus court = détection plus rapide, plus de trafic.
-- **Durée d'un forçage** en minutes (défaut **720** = 12 h) — durée appliquée lorsqu'on choisit
-  « Marche forcée » / « Arrêt forcé » ; le firmware décompte puis repasse en Auto.
+- **Language** of entity names and of the card: *Automatic* (Home Assistant language), *Français* or *English*.
+  Changing it renames the entities (their entity IDs do not change). Select options are translated too:
+  update automations that select an option by its text.
+- **Polling interval** (default **5 s**): shorter = faster detection, more traffic.
+- **Duration of a forced on / off** in minutes (default **720** = 12 h): applied when choosing
+  "Forced on" / "Forced off"; the firmware counts down, then goes back to auto.
 
 ---
 
-## 🎛️ Carte Lovelace
+## 🎛️ Lovelace card
 
-La carte `custom:f1atb-card` est **chargée automatiquement** par l'intégration (rien à installer) et
-**auto-détecte** le routeur. Elle affiche les tuiles de puissance, un indicateur **En ligne / Hors ligne**,
-et par action active : la forme d'onde (boutons), l'ouverture max (curseur) et le forçage. Elle **suit le
-thème** de Home Assistant (clair/sombre).
+The `custom:f1atb-card` card is **loaded automatically** by the integration (nothing to install) and finds the
+router by itself. It shows the power tiles, an **Online / Offline** indicator, temperature chips and, per
+active action, the waveform (buttons), the max openings (sliders), the override and the forced-on power.
+It follows the Home Assistant theme (light / dark) and the language chosen in the integration.
 
-**Ajout :** tableau de bord → **Ajouter une carte** → chercher **« F1ATB Solar Router »** (avec aperçu).
+**Add it:** dashboard → **Add card** → search **"F1ATB Solar Router"** (with preview).
+
+**Hide it while the router is off:** add a visibility condition on the card: state of `Connected` = `on`.
 
 <details>
-<summary>Si la carte n'apparaît pas dans le sélecteur</summary>
+<summary>If the card does not show up in the picker</summary>
 
-1. Videz le cache du navigateur (**Ctrl+F5**) après le redémarrage de HA.
-2. Sinon, ajoutez-la en **ressource** : Paramètres → Tableaux de bord → Ressources → Ajouter →
-   URL `/f1atb/f1atb-card.js`, type **Module JavaScript** → Ctrl+F5.
+1. Clear the browser cache (**Ctrl+F5**) after restarting HA.
+2. Otherwise add it as a **resource**: Settings → Dashboards → Resources → Add →
+   URL `/f1atb/f1atb-card.js`, type **JavaScript module** → Ctrl+F5.
 
-Vous pouvez aussi construire une carte avec les **cartes natives** de HA (les `select` s'affichent en menu
-déroulant, les `number` en curseur) — aucune carte custom nécessaire.
+You can also build a dashboard with the **native cards** (selects show as drop-downs, numbers as sliders).
 </details>
 
 ---
 
-## 🔋 Suivi d'énergie
+## 🔋 Energy tracking
 
-- **Énergie routée aujourd'hui** = calculée **par Home Assistant en intégrant la puissance routée** dans le
-  temps (méthode des trapèzes), remise à zéro à minuit. On n'utilise **pas** le compteur d'énergie « du jour »
-  du firmware, qui est sur-compté lorsque l'alimentation du routeur est coupée (sauts d'horloge au reboot
-  faussant son intégration). La puissance, elle, reste juste → le calcul HA est **fiable et cohérent**,
-  insensible aux coupures/redémarrages.
-- **Énergie routée totale** = compteur **à vie** remonté du routeur (utile pour l'onglet Énergie de HA).
-
----
-
-## ⚡ Marche forcée à une puissance donnée
-
-Plutôt que de raisonner en pourcentage d'ouverture, vous indiquez directement **la puissance à router** :
-
-1. **Calibrez une fois** la puissance max de l'appareil (puissance consommée à 100 % d'ouverture) :
-   - **Automatique** : bouton **« Calibrer »** → l'intégration ouvre à 100 %, laisse la mesure se stabiliser,
-     **moyenne la puissance routée sur ~10 s** et enregistre le résultat (procédure ~15 s, retour en Auto ensuite).
-   - **Manuel** : saisissez la valeur à la main dans **« Puissance max de l'appareil »** (les deux méthodes
-     restent utilisables à tout moment).
-2. **Entrez la puissance à router** dans **« Marche forcée (W) »** (ex. `1500`). L'intégration calcule
-   l'ouverture (`puissance / puissance_max × 100`, ex. **50 %**), l'écrit et **force la marche**.
-3. **Revenez en Auto** en remettant `0` (ou via le bouton **Auto** de la carte / le sélecteur *Forçage*).
-
-> 💡 Calibrez quand l'appareil peut réellement consommer (ex. chauffe-eau froid) pour mesurer sa vraie
-> puissance. La relation puissance/ouverture est supposée linéaire (approximation suffisante en pratique).
+- **Routed energy today** is computed **by Home Assistant by integrating the routed power** over time
+  (trapezoids), reset at midnight. The firmware's own daily counter is **not** used: it over-counts when the
+  router's power supply is cut (clock jumps at boot skew its integration).
+- **Routed energy total** is the router's **lifetime** counter. At boot the firmware briefly reports a stale
+  value (last midnight snapshot) or 0; the integration ignores readings that would make it go backwards, so
+  the Energy dashboard does not count the whole lifetime total again after each reboot.
 
 ---
 
-## 🔎 Comment ça marche
+## ⚡ Forced on at a given power
+
+Instead of an opening percentage, enter **the power to route** directly:
+
+1. **Calibrate once** the appliance max power (power drawn at 100 % opening):
+   - **Automatic**: **"Calibrate"** button → the integration opens to 100 %, lets the measurement settle,
+     **averages the routed power over ~10 s** and stores it (~20 s, then back to auto; your forced-on
+     opening is restored).
+   - **Manual**: type the value in **"Max power"** (both methods remain available).
+2. **Enter the power to route** in **"Forced-on power (W)"** (e.g. `1500`). The integration computes the
+   opening (`power / max power × 100`, e.g. **50 %**), writes it and **forces the routing on**.
+3. **Go back to auto** by entering `0` (or with the card's **Clear** button / the *Override* select).
+
+> 💡 Calibrate when the appliance can actually draw power (e.g. cold water heater). The power / opening
+> relation is assumed to be linear (a good enough approximation in practice).
+
+---
+
+## 🔎 How it works
 
 <p align="center">
-  <img src="docs/architecture.png" alt="Architecture : Home Assistant ⇄ HTTP local ⇄ routeur F1ATB ⇄ charge" width="100%">
+  <img src="docs/architecture.png" alt="Architecture: Home Assistant ⇄ local HTTP ⇄ F1ATB router ⇄ load" width="100%">
 </p>
 
-| Usage | Endpoint(s) |
+| Use | Endpoint(s) |
 |---|---|
-| Mesures live (puissances, énergies, températures) | `/ajax_data` |
-| État des actions **actives** (pilote les entités dynamiques) | `/ajax_etatActions` |
-| Système (uptime, RSSI, mémoire, IP) | `/ajax_dataESP32` |
-| Configuration (mode `Actif`, `ForceOuvre`) | `/ParaFixe` |
-| Écriture d'un réglage persistant | lecture `/ParaFixe` → modif du champ → renvoi `/ParaNew` |
-| Forçage marche/arrêt | `/ForceAction?NumAction=…&Force=…` |
+| Live measurements (powers, energies, temperatures) | `/ajax_data` |
+| State of the **active** actions (drives the dynamic entities) | `/ajax_etatActions` |
+| System (uptime, RSSI, memory, IP) | `/ajax_dataESP32` |
+| Configuration (mode `Actif`, `ForceOuvre`, `Vmax`) | `/ParaFixe` |
+| Writing a persistent setting | read `/ParaFixe` → change the field → post `/ParaNew` (serialised) |
+| Forced on / off | `/ForceAction?NumAction=…&Force=…` |
 
-Aucune clé d'accès n'est requise (les endpoints ajax et `/ForceAction` ne la vérifient pas). Une écriture
-persistante reproduit exactement le bouton « Sauvegarder » de l'interface web du routeur.
+No access key is needed (the ajax endpoints and `/ForceAction` do not check it). A persistent write does
+exactly what the "Save" button of the router's web UI does.
 
-> **Note technique :** `/ParaNew` doit être envoyé en `Content-Type: text/plain` — sinon l'ESP32 parse le
-> corps comme un formulaire et **ignore silencieusement** le JSON (réponse OK mais sans effet).
+> **Technical note:** `/ParaNew` must be sent with `Content-Type: text/plain`, otherwise the ESP32 parses the
+> body as a form and **silently ignores** the JSON (the response is OK but nothing changes).
+
+---
+
+## 🩺 Troubleshooting
+
+- **"Icon not available" on the integration**: normal for a custom integration (would need a
+  `home-assistant/brands` PR). No effect on how it works.
+- **Router powered off**: a **normal state**, not an error (typical if you switch its power supply). The
+  integration **stays loaded**: `Connected` turns *off*, the other entities become *unavailable*, the card shows
+  "Offline". **Everything fills in automatically** when it is powered on again.
+- **Missed polls**: up to 3 consecutive missed polls are tolerated (last values kept) before going offline.
+  An action that briefly disappears keeps its entities (unavailable); they are removed only when the action
+  is **disabled** in the router configuration.
+- **An action has no entities**: by design, only **active** actions have entities. Set its waveform to
+  something other than Inactive on the router.
 
 ---
 
-## 🩺 Dépannage
+## 🧪 Tests
 
-- **« icône non disponible » sur l'intégration** — normal pour une intégration custom (nécessiterait une PR
-  sur `home-assistant/brands`). Sans effet sur le fonctionnement.
-- **Routeur hors tension** — c'est un **état normal**, pas une erreur (typique si vous pilotez son
-  alimentation). L'intégration **reste chargée** (aucun bandeau « Attention requise / Échec de la
-  configuration ») : le capteur `Connecté` passe à *off*, les autres entités deviennent *indisponibles*,
-  et la carte affiche « Hors ligne ». **Tout se remplit automatiquement** à la remise sous tension.
-- **Une action n'a pas d'entités** — c'est voulu : seules les actions **actives** en ont. Activez la forme
-  d'onde (≠ Inactif) sur le routeur ou depuis HA.
-
----
+```bash
+python tests/test_filters.py   # energy counter filter + translations, no Home Assistant needed
+node tests/card_smoke.js       # card rendering with a fake hass (FR / EN / unavailable / pointer guard)
+```
 
 ## 📦 Versions
 
-Voir les [Releases](https://github.com/PMSSI/Integration-f1atb/releases). Mise à jour via HACS
-(⋮ → *Re-télécharger* / *Update*).
+See the [Releases](https://github.com/PMSSI/Integration-f1atb/releases). Update through HACS.
 
-## 📄 Licence
+## 📄 License
 
 [MIT](LICENSE).
 
 ---
 
-*Ce projet n'est pas affilié à F1ATB ; il s'appuie sur l'API publique du firmware officiel. Merci à
-[F1ATB](https://github.com/F1ATB/Solar-Router-F1ATB) pour ce super routeur solaire open-source.*
+*This project is not affiliated with F1ATB; it relies on the public API of the official firmware. Thanks to
+[F1ATB](https://github.com/F1ATB/Solar-Router-F1ATB) for this great open-source solar router.*

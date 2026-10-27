@@ -1,4 +1,4 @@
-"""Selects F1ATB : forme d'onde (mode) et forçage (marche/arrêt)."""
+"""F1ATB selects: waveform (mode) and override (forced on / off)."""
 from __future__ import annotations
 
 from homeassistant.components.select import SelectEntity
@@ -6,15 +6,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import (
-    CONF_FORCE_MINUTES,
-    DEFAULT_FORCE_MINUTES,
-    DOMAIN,
-    MODE_AUTO,
-    MODE_OFF,
-    MODE_ON,
-    FORCE_MODES,
-)
+from .const import CONF_FORCE_MINUTES, DEFAULT_FORCE_MINUTES, DOMAIN
 from .entity import F1atbActionEntity
 from .helpers import (
     async_setup_action_platform,
@@ -31,30 +23,27 @@ async def async_setup_entry(
 
     def factory(index: int) -> list:
         return [
-            FormeOndeSelect(coordinator, index),
-            ForcageSelect(coordinator, index, entry),
+            WaveformSelect(coordinator, index),
+            OverrideSelect(coordinator, index, entry),
         ]
 
     async_setup_action_platform(entry, coordinator, async_add_entities, factory)
 
 
-class FormeOndeSelect(F1atbActionEntity, SelectEntity):
-    """Forme d'onde (mode) de l'action. Écrit via /ParaNew (persistant)."""
+class WaveformSelect(F1atbActionEntity, SelectEntity):
+    """Waveform (mode) of the action. Written with /ParaNew (persistent)."""
 
     _attr_icon = "mdi:sine-wave"
     _kind = "forme_onde"
+    _name_key = "waveform"
 
     def __init__(self, coordinator, index: int) -> None:
         super().__init__(coordinator, index)
         self._attr_unique_id = f"{coordinator.entry.unique_id}_forme_onde_{index}"
 
     @property
-    def name(self) -> str:
-        return f"{self._action_name} forme d'onde"
-
-    @property
     def available(self) -> bool:
-        # Le mode vient de /ParaFixe : pas de config = pas d'affichage « Inactif » trompeur.
+        # The mode comes from /ParaFixe: no config = no misleading "Inactive".
         return super().available and self._config_ok
 
     @property
@@ -64,17 +53,17 @@ class FormeOndeSelect(F1atbActionEntity, SelectEntity):
 
     @property
     def options(self) -> list[str]:
-        return mode_options(self._is_triac)
+        return mode_options(self.coordinator.language, self._is_triac)
 
     @property
     def current_option(self) -> str | None:
         a = self._action
         if not a:
             return None
-        return mode_value_to_label(a.get("mode", 0), self._is_triac)
+        return mode_value_to_label(self.coordinator.language, a.get("mode", 0), self._is_triac)
 
     async def async_select_option(self, option: str) -> None:
-        value = mode_label_to_value(option, self._is_triac)
+        value = mode_label_to_value(self.coordinator.language, option, self._is_triac)
         if value is None:
             return
         idx = self._index
@@ -88,12 +77,12 @@ class FormeOndeSelect(F1atbActionEntity, SelectEntity):
         await self._write_and_refresh(config_change=True)
 
 
-class ForcageSelect(F1atbActionEntity, SelectEntity):
-    """Forçage du routage : Auto / Marche forcée / Arrêt forcé. Écrit via /ForceAction."""
+class OverrideSelect(F1atbActionEntity, SelectEntity):
+    """Routing override: auto / forced on / forced off. Written with /ForceAction."""
 
     _attr_icon = "mdi:gesture-tap-button"
-    _attr_options = FORCE_MODES
     _kind = "forcage"
+    _name_key = "forcing"
 
     def __init__(self, coordinator, index: int, entry: ConfigEntry) -> None:
         super().__init__(coordinator, index)
@@ -101,8 +90,10 @@ class ForcageSelect(F1atbActionEntity, SelectEntity):
         self._attr_unique_id = f"{coordinator.entry.unique_id}_forcage_{index}"
 
     @property
-    def name(self) -> str:
-        return f"{self._action_name} forçage"
+    def options(self) -> list[str]:
+        # Order matters: the card relies on [auto, forced on, forced off].
+        tr = self.coordinator.tr
+        return [tr("force_auto"), tr("force_on"), tr("force_off")]
 
     @property
     def current_option(self) -> str | None:
@@ -110,11 +101,12 @@ class ForcageSelect(F1atbActionEntity, SelectEntity):
         if not a:
             return None
         force = a.get("force", 0) or 0
+        auto, forced_on, forced_off = self.options
         if force > 0:
-            return MODE_ON
+            return forced_on
         if force < 0:
-            return MODE_OFF
-        return MODE_AUTO
+            return forced_off
+        return auto
 
     @property
     def extra_state_attributes(self) -> dict:
@@ -123,12 +115,11 @@ class ForcageSelect(F1atbActionEntity, SelectEntity):
         return {**super().extra_state_attributes, "minutes_restantes": abs(force)}
 
     async def async_select_option(self, option: str) -> None:
-        minutes = int(
-            self._entry.options.get(CONF_FORCE_MINUTES, DEFAULT_FORCE_MINUTES)
-        )
-        if option == MODE_ON:
+        minutes = int(self._entry.options.get(CONF_FORCE_MINUTES, DEFAULT_FORCE_MINUTES))
+        _, forced_on, forced_off = self.options
+        if option == forced_on:
             force = minutes
-        elif option == MODE_OFF:
+        elif option == forced_off:
             force = -minutes
         else:
             force = 0

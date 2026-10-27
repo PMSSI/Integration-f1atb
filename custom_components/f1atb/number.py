@@ -1,8 +1,9 @@
-"""Numbers F1ATB par action :
-- Ouverture max (ForceOuvre, %) — réglage direct de l'ouverture forcée.
-- Puissance max de l'appareil (W) — calibration côté HA (100 % d'ouverture = cette puissance).
-- Marche forcée (W) — entrer une puissance → l'ouverture est calculée automatiquement
-  (= puissance / puissance_max × 100), réglée, et la marche est forcée. 0 → retour Auto.
+"""F1ATB numbers, per action:
+- Max opening in auto routing (Vmax, %).
+- Forced-on opening (ForceOuvre, %): opening applied while the routing is forced on.
+- Appliance max power (W): HA-side calibration (100 % opening = this power).
+- Forced-on power (W): enter a power → the opening is computed (power / max power × 100),
+  written, and the routing is forced on. 0 → back to auto.
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ from .const import CONF_FORCE_MINUTES, DEFAULT_FORCE_MINUTES, DOMAIN
 from .entity import F1atbActionEntity
 from .helpers import async_setup_action_platform
 
-DEFAULT_MAX_POWER = 3000.0  # W à 100 % d'ouverture (valeur de départ, modifiable)
+DEFAULT_MAX_POWER = 3000.0  # W at 100 % opening (starting value, editable)
 
 
 async def async_setup_entry(
@@ -25,24 +26,23 @@ async def async_setup_entry(
     coordinator = hass.data[DOMAIN][entry.entry_id]
 
     def factory(index: int) -> list:
-        items = [
-            OuvertureMaxNumber(coordinator, index),
-            PuissanceMaxNumber(coordinator, index),
-            MarcheForceePuissanceNumber(coordinator, index, entry),
+        return [
+            ForcedOpeningNumber(coordinator, index),
+            MaxPowerNumber(coordinator, index),
+            ForcedPowerNumber(coordinator, index, entry),
+            AutoMaxOpeningNumber(coordinator, index),
         ]
-        # Ouverture max en routage AUTO (Vmax %) — créée pour toute action pilotée
-        # (pertinent pour le triac/SSR en mode proportionnel : Demi-sinus, PWM, etc.).
-        items.append(AutoOuvertureMaxNumber(coordinator, index))
-        return items
 
     async_setup_action_platform(entry, coordinator, async_add_entities, factory)
 
 
-class AutoOuvertureMaxNumber(F1atbActionEntity, NumberEntity):
-    """Ouverture MAX en routage AUTO (triac) = Vmax des périodes. Écrit via /ParaNew.
+class AutoMaxOpeningNumber(F1atbActionEntity, NumberEntity):
+    """MAX opening in AUTO routing = Vmax of the periods. Written with /ParaNew.
 
-    À distinguer de « Ouverture (marche forcée) » (ForceOuvre) : ici c'est le plafond
-    d'ouverture que l'algorithme normal ne dépassera pas. Appliqué à TOUTES les périodes.
+    Not to be confused with the forced-on opening (ForceOuvre): this is the ceiling the normal
+    algorithm never exceeds. Applied to ALL periods. Meaningful for proportional modes
+    (triac / SSR: phase cut, half-sine, PWM…). For a relay in On/Off mode the firmware uses
+    Vmax as a power-off threshold in WATTS, so the entity is unavailable there.
     """
 
     _attr_icon = "mdi:arrow-collapse-vertical"
@@ -52,19 +52,18 @@ class AutoOuvertureMaxNumber(F1atbActionEntity, NumberEntity):
     _attr_native_unit_of_measurement = PERCENTAGE
     _attr_mode = NumberMode.SLIDER
     _kind = "auto_ouverture_max"
+    _name_key = "auto_max_opening"
 
     def __init__(self, coordinator, index: int) -> None:
         super().__init__(coordinator, index)
         self._attr_unique_id = f"{coordinator.entry.unique_id}_auto_ouverture_max_{index}"
 
     @property
-    def name(self) -> str:
-        return f"{self._action_name} ouverture max (Auto)"
-
-    @property
     def available(self) -> bool:
-        # Vmax vient de /ParaFixe : indisponible tant que la config n'est pas lue.
-        return super().available and self._config_ok
+        a = self._action
+        relay_on_off = bool(a) and a.get("mode") == 1 and not a.get("is_triac")
+        # Vmax comes from /ParaFixe: unavailable until the config is read.
+        return super().available and self._config_ok and not relay_on_off
 
     @property
     def native_value(self) -> float | None:
@@ -78,21 +77,21 @@ class AutoOuvertureMaxNumber(F1atbActionEntity, NumberEntity):
         def _mutate(config: dict) -> None:
             actions = config.get("Actions") or []
             if 0 <= idx < len(actions):
-                periodes = actions[idx].get("Periodes")
-                if periodes is None:
-                    periodes = actions[idx].get("Périodes")
-                for p in (periodes or []):
-                    p["Vmax"] = v  # même plafond sur toutes les périodes
+                periods = actions[idx].get("Periodes")
+                if periods is None:
+                    periods = actions[idx].get("Périodes")
+                for p in (periods or []):
+                    p["Vmax"] = v  # same ceiling on every period
 
         await self.coordinator.client.async_patch_config(_mutate)
         await self._write_and_refresh(config_change=True)
 
 
-class OuvertureMaxNumber(F1atbActionEntity, NumberEntity):
-    """Ouverture appliquée en MARCHE FORCÉE (champ ForceOuvre). Écrit via /ParaNew (persistant).
+class ForcedOpeningNumber(F1atbActionEntity, NumberEntity):
+    """Opening applied while FORCED ON (ForceOuvre field). Written with /ParaNew (persistent).
 
-    À distinguer de « Ouverture max (Auto) » : ici c'est l'ouverture utilisée quand le
-    routage est forcé en marche (pas le plafond du routage automatique).
+    Not to be confused with the auto max opening: this is the opening used when the routing
+    is forced on, not the ceiling of the automatic routing.
     """
 
     _attr_icon = "mdi:gauge"
@@ -102,18 +101,15 @@ class OuvertureMaxNumber(F1atbActionEntity, NumberEntity):
     _attr_native_unit_of_measurement = PERCENTAGE
     _attr_mode = NumberMode.SLIDER
     _kind = "ouverture_max"
+    _name_key = "forced_opening"
 
     def __init__(self, coordinator, index: int) -> None:
         super().__init__(coordinator, index)
         self._attr_unique_id = f"{coordinator.entry.unique_id}_ouverture_max_{index}"
 
     @property
-    def name(self) -> str:
-        return f"{self._action_name} ouverture (marche forcée)"
-
-    @property
     def available(self) -> bool:
-        # ForceOuvre vient de /ParaFixe : indisponible tant que la config n'est pas lue.
+        # ForceOuvre comes from /ParaFixe: unavailable until the config is read.
         return super().available and self._config_ok
 
     @property
@@ -134,11 +130,11 @@ class OuvertureMaxNumber(F1atbActionEntity, NumberEntity):
         await self._write_and_refresh(config_change=True)
 
 
-class PuissanceMaxNumber(F1atbActionEntity, RestoreNumber):
-    """Calibration : puissance consommée par l'appareil à 100 % d'ouverture (W).
+class MaxPowerNumber(F1atbActionEntity, RestoreNumber):
+    """Calibration: power drawn by the appliance at 100 % opening (W).
 
-    Stockée côté Home Assistant (le firmware n'a pas ce réglage). Sert au calcul de
-    l'ouverture pour la « Marche forcée (W) ». Valeur mémorisée entre redémarrages.
+    Stored on the Home Assistant side (the firmware has no such setting). Used to compute the
+    opening of the forced-on power. Kept across restarts.
     """
 
     _attr_icon = "mdi:flash-outline"
@@ -149,28 +145,25 @@ class PuissanceMaxNumber(F1atbActionEntity, RestoreNumber):
     _attr_mode = NumberMode.BOX
     _attr_entity_category = EntityCategory.CONFIG
     _kind = "puissance_max"
+    _name_key = "max_power"
 
     def __init__(self, coordinator, index: int) -> None:
         super().__init__(coordinator, index)
         self._attr_unique_id = f"{coordinator.entry.unique_id}_puissance_max_{index}"
         coordinator.appliance_max_power.setdefault(index, DEFAULT_MAX_POWER)
 
-    @property
-    def name(self) -> str:
-        return f"{self._action_name} puissance max"
-
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        # Restaure la valeur mémorisée (sinon on garde celle déjà en mémoire côté coordinator,
-        # qui survit à un cycle inactif→actif pendant la même session HA).
+        # Restore the stored value (otherwise keep the one already in the coordinator, which
+        # survives an inactive→active cycle within the same HA session).
         last = await self.async_get_last_number_data()
         if last is not None and last.native_value is not None:
             self.coordinator.appliance_max_power[self._index] = float(last.native_value)
 
     @property
     def native_value(self) -> float | None:
-        # Source unique de vérité = le coordinator, pour que la calibration auto
-        # (qui écrit dans ce dict) mette l'affichage à jour toute seule.
+        # Single source of truth = the coordinator, so the automatic calibration (which writes
+        # into this dict) updates the display by itself.
         return float(self.coordinator.appliance_max_power.get(self._index, DEFAULT_MAX_POWER))
 
     @property
@@ -181,38 +174,35 @@ class PuissanceMaxNumber(F1atbActionEntity, RestoreNumber):
         }
 
     async def async_set_native_value(self, value: float) -> None:
-        # Saisie MANUELLE : toujours possible (surcharge la calibration auto).
+        # MANUAL entry: always allowed (overrides the automatic calibration).
         self.coordinator.appliance_max_power[self._index] = float(max(0, value))
         self.async_write_ha_state()
 
 
-class MarcheForceePuissanceNumber(F1atbActionEntity, RestoreNumber):
-    """« Marche forcée (W) » : entrer une puissance à router.
+class ForcedPowerNumber(F1atbActionEntity, RestoreNumber):
+    """Forced-on power (W): enter the power to route.
 
-    L'ouverture = puissance / puissance_max × 100 est calculée automatiquement, écrite
-    dans ForceOuvre (/ParaNew) et la marche est forcée (/ForceAction). 0 → retour Auto.
+    The opening = power / max power × 100 is computed, written to ForceOuvre (/ParaNew) and
+    the routing is forced on (/ForceAction). 0 → back to auto.
     """
 
     _attr_icon = "mdi:flash"
     _attr_native_min_value = 0
-    # Plafond FIXE et large : ne PAS le fixer à pmax, sinon HA rejette (ServiceValidationError)
-    # toute saisie > pmax avant même d'appeler async_set_native_value. Le vrai plafond (router au
-    # plus 100 %) est appliqué par le clamp de l'ouverture ci-dessous ; la carte borne à pmax.
+    # FIXED, generous ceiling: do NOT set it to the max power, otherwise HA rejects any value
+    # above it (ServiceValidationError) before async_set_native_value is even called. The real
+    # cap (route at most 100 %) is the opening clamp below; the card limits input to max power.
     _attr_native_max_value = 10000
     _attr_native_step = 50
     _attr_native_unit_of_measurement = UnitOfPower.WATT
     _attr_mode = NumberMode.BOX
     _kind = "marche_forcee_w"
+    _name_key = "forced_power"
 
     def __init__(self, coordinator, index: int, entry: ConfigEntry) -> None:
         super().__init__(coordinator, index)
         self._entry = entry
         self._attr_unique_id = f"{coordinator.entry.unique_id}_marche_forcee_w_{index}"
         self._value = 0.0
-
-    @property
-    def name(self) -> str:
-        return f"{self._action_name} marche forcée (W)"
 
     def _max_power(self) -> float:
         return float(self.coordinator.appliance_max_power.get(self._index, DEFAULT_MAX_POWER)) or DEFAULT_MAX_POWER
@@ -244,7 +234,7 @@ class MarcheForceePuissanceNumber(F1atbActionEntity, RestoreNumber):
         minutes = int(self._entry.options.get(CONF_FORCE_MINUTES, DEFAULT_FORCE_MINUTES))
 
         if value <= 0:
-            # Retour en Auto (fin du forçage)
+            # Back to auto (end of the forced-on)
             await self.coordinator.client.async_force_action(idx, 0)
             await self._write_and_refresh(config_change=False)
             self.async_write_ha_state()
@@ -259,6 +249,6 @@ class MarcheForceePuissanceNumber(F1atbActionEntity, RestoreNumber):
                 actions[idx]["ForceOuvre"] = opening
 
         await self.coordinator.client.async_patch_config(_mutate)
-        await self.coordinator.client.async_force_action(idx, minutes)  # Marche forcée
+        await self.coordinator.client.async_force_action(idx, minutes)  # forced on
         await self._write_and_refresh(config_change=True)
         self.async_write_ha_state()

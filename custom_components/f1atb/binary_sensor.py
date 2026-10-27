@@ -1,4 +1,4 @@
-"""Binary sensor F1ATB : connectivité du routeur (toujours présent)."""
+"""F1ATB binary sensor: router connectivity (always present)."""
 from __future__ import annotations
 
 from homeassistant.components.binary_sensor import (
@@ -21,14 +21,13 @@ async def async_setup_entry(
 
 
 class F1atbConnectedBinarySensor(F1atbBaseEntity, BinarySensorEntity):
-    """« Connecté » : ON tant que le routeur répond, OFF sinon.
+    """Connected: ON while the router answers, OFF otherwise.
 
-    Reste TOUJOURS disponible (contrairement aux autres entités) pour pouvoir rapporter
-    l'état déconnecté → permet de suivre quand le routeur est en marche (historique).
+    ALWAYS available (unlike the other entities) so it can report the disconnected state →
+    tracks when the router is running (history), and can drive a card's visibility.
     """
 
     _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
-    _attr_name = "Connecté"
     _attr_icon = "mdi:router-wireless"
 
     def __init__(self, coordinator) -> None:
@@ -36,8 +35,12 @@ class F1atbConnectedBinarySensor(F1atbBaseEntity, BinarySensorEntity):
         self._attr_unique_id = f"{coordinator.entry.unique_id}_connected"
 
     @property
+    def name(self) -> str:
+        return self.coordinator.tr("connected")
+
+    @property
     def available(self) -> bool:
-        # Toujours dispo : doit pouvoir afficher "Déconnecté" quand le routeur est coupé.
+        # Always available: must be able to show "disconnected" when the router is off.
         return True
 
     @property
@@ -46,4 +49,5 @@ class F1atbConnectedBinarySensor(F1atbBaseEntity, BinarySensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict:
-        return {"f1atb_kind": "connected"}
+        # f1atb_language: the card displays its labels in the language chosen at setup.
+        return {"f1atb_kind": "connected", "f1atb_language": self.coordinator.language}

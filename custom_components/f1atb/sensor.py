@@ -1,10 +1,11 @@
-"""Capteurs F1ATB : puissances de routage (global) + ouverture % (par action active)."""
+"""F1ATB sensors: routing powers and energies (global) + opening % (per active action)."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from homeassistant.components.sensor import (
+    RestoreSensor,
     SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
@@ -24,11 +25,16 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .entity import F1atbActionEntity, F1atbBaseEntity
-from .helpers import async_setup_action_platform, temp_channel_indices
+from .filters import monotonic_total
+from .helpers import (
+    async_setup_action_platform,
+    temp_channel_indices,
+    temp_channel_retained,
+)
 
-# Au-delà de cet écart entre deux mesures (redémarrage HA, routeur coupé), on n'intègre
-# pas l'intervalle : on ignore la période au lieu d'inventer de l'énergie.
-INTEGRATION_MAX_DT = 600  # secondes
+# Beyond this gap between two samples (HA restart, router switched off) the interval is not
+# integrated: the period is skipped instead of inventing energy.
+INTEGRATION_MAX_DT = 600  # seconds
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -39,7 +45,6 @@ class F1atbSensorDesc(SensorEntityDescription):
 GLOBAL_SENSORS: tuple[F1atbSensorDesc, ...] = (
     F1atbSensorDesc(
         key="grid_import_power",
-        name="Soutirée réseau",
         icon="mdi:transmission-tower-export",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
@@ -48,7 +53,6 @@ GLOBAL_SENSORS: tuple[F1atbSensorDesc, ...] = (
     ),
     F1atbSensorDesc(
         key="grid_export_power",
-        name="Injectée réseau",
         icon="mdi:transmission-tower-import",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
@@ -57,25 +61,11 @@ GLOBAL_SENSORS: tuple[F1atbSensorDesc, ...] = (
     ),
     F1atbSensorDesc(
         key="routed_power",
-        name="Puissance routée",
         icon="mdi:sine-wave",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         value=lambda d: d.get("routed_power"),
-    ),
-    F1atbSensorDesc(
-        key="routed_energy_total",
-        name="Énergie routée totale",
-        icon="mdi:lightning-bolt-outline",
-        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        # Compteur à vie : ne se remet JAMAIS à zéro → parfait pour le tableau de bord Énergie.
-        value=lambda d: (
-            None if d.get("routed_energy_total") is None
-            else round(d["routed_energy_total"] / 1000, 3)
-        ),
     ),
 )
 
@@ -85,23 +75,28 @@ async def async_setup_entry(
 ) -> None:
     coordinator = hass.data[DOMAIN][entry.entry_id]
 
-    # Capteurs globaux + "routé aujourd'hui" calculé par intégration de la puissance
     entities: list = [F1atbGlobalSensor(coordinator, desc) for desc in GLOBAL_SENSORS]
+    entities.append(F1atbRoutedTotalSensor(coordinator))
     entities.append(F1atbRoutedTodaySensor(coordinator))
     async_add_entities(entities)
 
-    # Capteur ouverture % par action active (dynamique)
+    # Opening % per active action (dynamic)
     def factory(index: int) -> list:
-        return [OuvertureSensor(coordinator, index)]
+        return [OpeningSensor(coordinator, index)]
 
     async_setup_action_platform(entry, coordinator, async_add_entities, factory)
 
-    # Capteurs de température des canaux configurés 0..3 (dynamique)
+    # Temperature of the configured channels 0..3 (dynamic)
     def temp_factory(channel: int) -> list:
         return [TemperatureSensor(coordinator, channel)]
 
     async_setup_action_platform(
-        entry, coordinator, async_add_entities, temp_factory, keys_fn=temp_channel_indices
+        entry,
+        coordinator,
+        async_add_entities,
+        temp_factory,
+        keys_fn=temp_channel_indices,
+        retained_fn=temp_channel_retained,
     )
 
 
@@ -114,6 +109,10 @@ class F1atbGlobalSensor(F1atbBaseEntity, SensorEntity):
         self._attr_unique_id = f"{coordinator.entry.unique_id}_{description.key}"
 
     @property
+    def name(self) -> str:
+        return self.coordinator.tr(self.entity_description.key)
+
+    @property
     def native_value(self) -> float | None:
         return self.entity_description.value(self.coordinator.data or {})
 
@@ -122,9 +121,65 @@ class F1atbGlobalSensor(F1atbBaseEntity, SensorEntity):
         return {"f1atb_kind": self.entity_description.key}
 
 
+class F1atbRoutedTotalSensor(F1atbBaseEntity, RestoreSensor):
+    """Lifetime routed energy (meter counter): the sensor to use in the Energy dashboard.
+
+    Filtered so it never goes backwards: at boot the firmware briefly reports a stale midnight
+    snapshot or 0, which the recorder would take as a meter reset and then count the whole
+    lifetime total again. The last good value survives HA restarts.
+    """
+
+    _attr_icon = "mdi:lightning-bolt-outline"
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+
+    def __init__(self, coordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.entry.unique_id}_routed_energy_total"
+        self._value: float | None = None
+        self._drop_since: float | None = None
+
+    @property
+    def name(self) -> str:
+        return self.coordinator.tr("routed_energy_total")
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last = await self.async_get_last_sensor_data()
+        if last is not None and last.native_value is not None:
+            try:
+                self._value = float(last.native_value)
+            except (TypeError, ValueError):
+                self._value = None
+        self._update_value()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        self._update_value()
+        super()._handle_coordinator_update()
+
+    def _update_value(self) -> None:
+        if not self.coordinator.last_update_success:
+            return
+        wh = (self.coordinator.data or {}).get("routed_energy_total")
+        kwh = None if wh is None else round(wh / 1000, 3)
+        self._value, self._drop_since = monotonic_total(
+            self._value, kwh, self._drop_since, dt_util.utcnow().timestamp()
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        return self._value
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {"f1atb_kind": "routed_energy_total"}
+
+
 @dataclass
 class _RoutedTodayExtra(ExtraStoredData):
-    """État persisté du cumul journalier (survit à un redémarrage de HA)."""
+    """Persisted state of the daily total (survives an HA restart)."""
 
     accum_wh: float | None
     day: str | None
@@ -134,15 +189,13 @@ class _RoutedTodayExtra(ExtraStoredData):
 
 
 class F1atbRoutedTodaySensor(F1atbBaseEntity, SensorEntity, RestoreEntity):
-    """Énergie routée aujourd'hui, calculée par INTÉGRATION de la puissance routée.
+    """Routed energy today, computed by INTEGRATING the routed power.
 
-    Le compteur d'énergie « du jour » du firmware est sur-compté (surtout quand l'alimentation
-    du routeur est coupée : sauts d'horloge au reboot → intégration faussée). On intègre donc
-    la puissance routée (physiquement bornée, elle, correcte) côté HA, en trapèzes, et on remet
-    à zéro à minuit local. Résultat fiable et cohérent, indépendant des reboots du routeur.
+    The firmware's own daily counter over-counts (especially when the router's power supply is
+    cut: clock jumps at boot skew its integration). So the routed power (physically bounded and
+    correct) is integrated on the HA side with trapezoids, reset at local midnight.
     """
 
-    _attr_name = "Énergie routée aujourd'hui"
     _attr_icon = "mdi:lightning-bolt"
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
@@ -152,11 +205,15 @@ class F1atbRoutedTodaySensor(F1atbBaseEntity, SensorEntity, RestoreEntity):
     def __init__(self, coordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.entry.unique_id}_routed_energy_today"
-        self._accum: float = 0.0          # Wh accumulés aujourd'hui
-        self._day: str | None = None      # date locale du cumul courant
-        self._last_ts = None              # datetime UTC de la dernière mesure intégrée
-        self._last_power: float = 0.0     # dernière puissance routée (W)
-        self._value: float = 0.0          # kWh du jour
+        self._accum: float = 0.0          # Wh accumulated today
+        self._day: str | None = None      # local date of the current total
+        self._last_ts = None              # UTC datetime of the last integrated sample
+        self._last_power: float = 0.0     # last routed power (W)
+        self._value: float = 0.0          # kWh today
+
+    @property
+    def name(self) -> str:
+        return self.coordinator.tr("routed_energy_today")
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -165,7 +222,7 @@ class F1atbRoutedTodaySensor(F1atbBaseEntity, SensorEntity, RestoreEntity):
             d = extra.as_dict()
             self._accum = float(d.get("accum_wh") or 0.0)
             self._day = d.get("day")
-        # Si HA reprend un autre jour, on repartira de zéro au 1er échantillon.
+        # If HA resumes on another day, the first sample resets to zero.
         self._value = round(self._accum / 1000.0, 3)
 
     @property
@@ -178,7 +235,7 @@ class F1atbRoutedTodaySensor(F1atbBaseEntity, SensorEntity, RestoreEntity):
         super()._handle_coordinator_update()
 
     def _integrate(self) -> None:
-        # Pas d'intégration si le routeur est injoignable (données périmées).
+        # No integration while the router is unreachable (stale data).
         if not self.coordinator.last_update_success:
             return
         power = (self.coordinator.data or {}).get("routed_power")
@@ -192,7 +249,7 @@ class F1atbRoutedTodaySensor(F1atbBaseEntity, SensorEntity, RestoreEntity):
         now = dt_util.utcnow()
         today = dt_util.now().date().isoformat()
 
-        if self._day != today:  # nouveau jour (ou 1re fois) → remise à zéro
+        if self._day != today:  # new day (or first time) → reset
             self._day = today
             self._accum = 0.0
             self._last_ts = now
@@ -203,7 +260,7 @@ class F1atbRoutedTodaySensor(F1atbBaseEntity, SensorEntity, RestoreEntity):
         if self._last_ts is not None:
             dt = (now - self._last_ts).total_seconds()
             if 0 < dt <= INTEGRATION_MAX_DT:
-                # Trapèze : énergie (Wh) = puissance moyenne × durée / 3600
+                # Trapezoid: energy (Wh) = mean power × duration / 3600
                 self._accum += (self._last_power + power) / 2.0 * dt / 3600.0
         self._last_ts = now
         self._last_power = power
@@ -215,14 +272,17 @@ class F1atbRoutedTodaySensor(F1atbBaseEntity, SensorEntity, RestoreEntity):
 
     @property
     def extra_state_attributes(self) -> dict:
-        return {"f1atb_kind": "routed_energy_today", "methode": "intégration de la puissance (HA)"}
+        return {
+            "f1atb_kind": "routed_energy_today",
+            "methode": self.coordinator.tr("energy_method"),
+        }
 
 
 class TemperatureSensor(F1atbBaseEntity, SensorEntity):
-    """Température d'un canal configuré (DS18B20 interne / externe / MQTT).
+    """Temperature of a configured channel (internal DS18B20 / external / MQTT).
 
-    Un canal (0..3) est exposé s'il est configuré côté routeur (Source_Temp ≠ « tempNo »).
-    L'entité se retire d'elle-même si le canal disparaît de la config.
+    A channel (0..3) is exposed when it is configured on the router (Source_Temp != "tempNo").
+    The entity removes itself when the channel disappears from the config.
     """
 
     _attr_device_class = SensorDeviceClass.TEMPERATURE
@@ -242,7 +302,7 @@ class TemperatureSensor(F1atbBaseEntity, SensorEntity):
     @property
     def name(self) -> str:
         c = self._chan
-        return (c.get("name") if c else None) or f"Température {self._channel}"
+        return (c.get("name") if c else None) or self.coordinator.tr("temperature", channel=self._channel)
 
     @property
     def available(self) -> bool:
@@ -272,25 +332,22 @@ class TemperatureSensor(F1atbBaseEntity, SensorEntity):
 
     @callback
     def _remove_if_gone(self) -> None:
-        if self._channel not in (self.coordinator.data or {}).get("temp_channels", {}):
+        if not temp_channel_retained(self.coordinator.data, self._channel):
             self.hass.async_create_task(self.async_remove(force_remove=True))
 
 
-class OuvertureSensor(F1atbActionEntity, SensorEntity):
-    """Ouverture instantanée du routage (%) pour une action active."""
+class OpeningSensor(F1atbActionEntity, SensorEntity):
+    """Current routing opening (%) of an active action."""
 
     _attr_icon = "mdi:gauge"
     _attr_native_unit_of_measurement = PERCENTAGE
     _attr_state_class = SensorStateClass.MEASUREMENT
     _kind = "ouverture"
+    _name_key = "opening"
 
     def __init__(self, coordinator, index: int) -> None:
         super().__init__(coordinator, index)
         self._attr_unique_id = f"{coordinator.entry.unique_id}_ouverture_{index}"
-
-    @property
-    def name(self) -> str:
-        return f"{self._action_name} ouverture"
 
     @property
     def native_value(self) -> float | None:

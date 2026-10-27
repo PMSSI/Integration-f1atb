@@ -1,4 +1,4 @@
-"""Button F1ATB : calibration auto de la puissance max (par action active)."""
+"""F1ATB button: automatic calibration of the max power (per active action)."""
 from __future__ import annotations
 
 from homeassistant.components.button import ButtonEntity
@@ -24,24 +24,23 @@ async def async_setup_entry(
 
 
 class CalibrationButton(F1atbActionEntity, ButtonEntity):
-    """Lance la calibration : ouvre à 100 %, mesure la puissance routée, l'enregistre.
+    """Start the calibration: open to 100 %, measure the routed power, store it.
 
-    N'empêche pas la saisie manuelle de « Puissance max de l'appareil » (les deux
-    écrivent la même valeur ; la dernière action gagne).
+    Manual entry of the max power is still possible (both write the same value; the last
+    one wins).
     """
 
     _attr_icon = "mdi:ruler"
     _attr_entity_category = EntityCategory.CONFIG
     _kind = "calibrer"
+    _name_key = "calibrate"
 
     def __init__(self, coordinator, index: int) -> None:
         super().__init__(coordinator, index)
         self._attr_unique_id = f"{coordinator.entry.unique_id}_calibrer_{index}"
 
-    @property
-    def name(self) -> str:
-        return f"{self._action_name} calibrer puissance max"
-
     async def async_press(self) -> None:
-        # Tâche de fond : la procédure dure ~15 s (délai d'adaptation + moyenne sur 10 s).
-        self.hass.async_create_task(self.coordinator.async_calibrate(self._index))
+        # Background task: the procedure takes ~20 s (settling time + 10 s average).
+        self.coordinator.entry.async_create_background_task(
+            self.hass, self.coordinator.async_calibrate(self._index), "f1atb_calibration"
+        )

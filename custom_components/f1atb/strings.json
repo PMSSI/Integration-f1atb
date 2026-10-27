@@ -2,9 +2,12 @@
   "config": {
     "step": {
       "user": {
-        "title": "F1ATB Solar Router",
-        "description": "IP address or hostname of the router (e.g. {exemple}).",
-        "data": { "host": "Host" }
+        "title": "F1ATB solar router",
+        "description": "IP address or hostname of the router (e.g. {example}).",
+        "data": {
+          "host": "Host",
+          "language": "Language of entity names and of the card"
+        }
       }
     },
     "error": { "cannot_connect": "Cannot connect to the router." },
@@ -15,9 +18,19 @@
       "init": {
         "title": "Options",
         "data": {
+          "language": "Language of entity names and of the card",
           "scan_interval": "Polling interval (s)",
-          "force_minutes": "Forcing duration (minutes)"
+          "force_minutes": "Duration of a forced on/off (minutes)"
         }
+      }
+    }
+  },
+  "selector": {
+    "language": {
+      "options": {
+        "auto": "Automatic (Home Assistant language)",
+        "fr": "Français",
+        "en": "English"
       }
     }
   }

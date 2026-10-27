@@ -1,13 +1,14 @@
 /**
- * Carte Lovelace interactive pour l'intégration F1ATB Solar Router.
- * Auto-détecte les entités de l'intégration (aucune config requise), et pilote
- * par action active : forme d'onde, ouverture max, forçage (Auto/Marche/Arrêt).
+ * Interactive Lovelace card for the F1ATB Solar Router integration.
+ * Finds the integration's entities by itself (no configuration needed) and controls each
+ * active action: waveform, max opening, override (auto / forced on / forced off).
+ * Labels follow the language chosen in the integration setup (French or English).
  *
- * Installation : copier ce fichier dans <config>/www/ puis ajouter une ressource
- *   URL: /local/f1atb-card.js   Type: JavaScript Module
- * Puis dans une vue : ajouter une carte « Manuel » avec  type: custom:f1atb-card
+ * Loaded automatically by the integration. Manual install (without the integration's auto-load):
+ * copy this file to <config>/www/ and add the resource  /local/f1atb-card.js  (JavaScript module).
+ * Then in a view, add a card:  type: custom:f1atb-card
  */
-const F1ATB_CARD_VERSION = "0.4.5";
+const F1ATB_CARD_VERSION = "0.5.0";
 
 const LOGO = `
 <svg viewBox="44 60 186 128" class="logo">
@@ -27,9 +28,9 @@ const LOGO = `
 
 const STYLE = `
 :host{
- /* Couleurs sémantiques (fixes, elles portent un sens) */
+ /* Semantic colours (fixed: they carry meaning) */
  --imp:#f0663d;--exp:#12b981;--triac:#2f7ff0;--relais:#0ea5a5;
- /* Surfaces / texte / traits : suivent le thème HA (dark<->light auto) */
+ /* Surfaces / text / lines: follow the HA theme (dark <-> light) */
  --ink:var(--primary-text-color,#141821);
  --ink2:var(--secondary-text-color,#565c6a);
  --muted:var(--secondary-text-color,#8a909c);
@@ -88,111 +89,190 @@ const STYLE = `
 .empty{padding:26px;text-align:center;color:var(--muted);font-size:13px}
 `;
 
-const FMT = (n, d = 0) => (n == null || isNaN(n)) ? "—" : Number(n).toLocaleString("fr-FR", { maximumFractionDigits: d, minimumFractionDigits: d });
-// Échappement HTML : le nom du routeur/action est du texte libre (firmware) injecté dans innerHTML.
+const I18N = {
+  fr: {
+    router: "Routeur F1ATB", unavailable: "Indisponible", online: "En ligne", offline: "Hors ligne",
+    noAnswer: "Le routeur ne répond pas (hors tension ?).<br>La carte se remplit dès qu'il est joignable.",
+    noAction: "Aucune action active.<br>Activez une action sur le routeur pour la piloter ici.",
+    offlineActions: "Routeur hors ligne.<br>Les commandes réapparaîtront à la remise sous tension.",
+    grid_import: "Soutirée", grid_export: "Injectée", routed: "Routée", channel: "Canal",
+    waveform: "Forme d'onde", autoMax: "Ouverture max (Auto)", autoHint: "routage normal",
+    forcedOpening: "Ouverture (marche forcée)", forcedHint: "si forcé", override: "Forçage",
+    overrideLabels: ["Auto", "Marche forcée", "Arrêt forcé"],
+    forcedPower: "Marche forcée à une puissance", clear: "Effacer", clearTitle: "Remettre à 0 (retour Auto)",
+    maxPower: "Puissance max de l'appareil", calibrate: "⚙ Calibrer", calibrating: "Calibration…",
+    action: "Action", broken: "Carte F1ATB momentanément indisponible.",
+  },
+  en: {
+    router: "F1ATB router", unavailable: "Unavailable", online: "Online", offline: "Offline",
+    noAnswer: "The router does not answer (powered off?).<br>The card fills in as soon as it is reachable.",
+    noAction: "No active action.<br>Enable an action on the router to control it here.",
+    offlineActions: "Router offline.<br>The controls come back when it is powered on again.",
+    grid_import: "Grid import", grid_export: "Grid export", routed: "Routed", channel: "Channel",
+    waveform: "Waveform", autoMax: "Max opening (auto)", autoHint: "normal routing",
+    forcedOpening: "Forced-on opening", forcedHint: "when forced", override: "Override",
+    overrideLabels: ["Auto", "Forced on", "Forced off"],
+    forcedPower: "Forced on at a given power", clear: "Clear", clearTitle: "Reset to 0 (back to auto)",
+    maxPower: "Appliance max power", calibrate: "⚙ Calibrate", calibrating: "Calibrating…",
+    action: "Action", broken: "F1ATB card temporarily unavailable.",
+  },
+};
+const OVERRIDE_CLS = ["", "marche", "arret"]; // by option index: auto, forced on, forced off
+
+// HTML escaping: router / action / probe names are free text (firmware) injected into innerHTML.
 const ESC = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const OK = (s) => !!s && s.state !== "unavailable" && s.state !== "unknown";
 
 class F1atbCard extends HTMLElement {
-  setConfig(config) { this._config = config || {}; }
+  setConfig(config) {
+    this._config = config || {};
+    this._sig = null;
+  }
 
   set hass(hass) {
     this._hass = hass;
-    // Ne pas reconstruire la carte pendant que l'utilisateur saisit dans un champ
-    // (sinon le focus et la valeur en cours seraient perdus à chaque mise à jour d'état).
+    // Never rebuild while the user is typing in a number field or has a finger/mouse down on
+    // a control: the rebuild would drop the focus, the typed value, the tap or the slider drag.
     const ae = this._root && this._root.activeElement;
-    if (ae && ae.tagName === "INPUT") return;
+    if (this._pointer || (ae && ae.tagName === "INPUT" && ae.type === "number")) {
+      this._pending = true;
+      return;
+    }
     this._render();
   }
 
+  _lang() {
+    const conn = this._connEid ? this._hass.states[this._connEid] : null;
+    const chosen = conn && conn.attributes && conn.attributes.f1atb_language;
+    const ha = String(this._hass.language || (this._hass.locale && this._hass.locale.language) || "en");
+    return chosen === "fr" || chosen === "en" ? chosen : (ha.toLowerCase().indexOf("fr") === 0 ? "fr" : "en");
+  }
+
   _entities() {
-    // Détection robuste : toutes les entités de l'intégration portent l'attribut f1atb_kind.
+    // Entities of the integration: by registry platform when available (keeps working while
+    // they are unavailable), else by their f1atb_kind attribute. Unavailable entities lose
+    // their attributes, so the last known kind / action of each entity is cached.
     const states = this._hass.states || {};
-    return Object.keys(states).filter(
-      (eid) => states[eid] && states[eid].attributes && states[eid].attributes.f1atb_kind
-    );
+    const reg = this._hass.entities || {};
+    this._meta = this._meta || {};
+    const out = [];
+    Object.keys(states).forEach((eid) => {
+      const s = states[eid];
+      const a = (s && s.attributes) || {};
+      const ours = reg[eid] ? reg[eid].platform === "f1atb" : !!a.f1atb_kind;
+      if (!ours) return;
+      if (a.f1atb_kind) {
+        this._meta[eid] = { kind: a.f1atb_kind, index: a.action_index, name: a.action_name, ch: a.temp_channel, nom: a.nom };
+      }
+      if (this._meta[eid]) out.push(eid);
+    });
+    return out;
   }
 
   _st(eid) { return this._hass.states[eid]; }
 
+  _bindRootOnce() {
+    if (this._rootBound) return;
+    this._rootBound = true;
+    this._root.addEventListener("pointerdown", () => { this._pointer = true; }, true);
+    const release = () => {
+      this._pointer = false;
+      // Let the click / change event fire on the current DOM before re-rendering.
+      setTimeout(() => this._flush(), 300);
+    };
+    this._root.addEventListener("pointerup", release, true);
+    this._root.addEventListener("pointercancel", release, true);
+    this._root.addEventListener("focusout", () => setTimeout(() => this._flush(), 0), true);
+  }
+
+  _flush() {
+    if (!this._pending || this._pointer) return;
+    const ae = this._root.activeElement;
+    if (ae && ae.tagName === "INPUT" && ae.type === "number") return;
+    this._pending = false;
+    this._render();
+  }
+
   _render() {
     if (!this._hass) return;
-    if (!this._root) {
-      this._root = this.attachShadow({ mode: "open" });
-    }
-    // Anti-plantage : ne JAMAIS lever d'erreur (sinon HA affiche « erreur de configuration »),
-    // notamment quand le routeur est hors ligne et que les entités sont indisponibles.
+    if (!this._root) this._root = this.attachShadow({ mode: "open" });
+    this._bindRootOnce();
+    // Never throw (HA would show "configuration error"), e.g. while entities are unavailable.
     try {
       this._renderInner();
     } catch (e) {
       console.error("f1atb-card:", e);
-      this._root.innerHTML =
-        '<ha-card><div style="padding:18px;color:var(--secondary-text-color,#888)">Carte F1ATB momentanément indisponible.</div></ha-card>';
+      this._sig = null;
+      const t = I18N[this._lang ? this._lang() : "en"] || I18N.en;
+      this._root.innerHTML = `<ha-card><div style="padding:18px;color:var(--secondary-text-color,#888)">${t.broken}</div></ha-card>`;
     }
   }
 
   _renderInner() {
     const eids = this._entities();
+    const meta = this._meta;
+    this._connEid = eids.filter((e) => meta[e].kind === "connected")[0] || null;
+    const lang = this._lang();
+    const t = I18N[lang];
+    const locale = lang === "fr" ? "fr-FR" : "en-US";
+    const FMT = (n, d) => (n == null || isNaN(n)) ? "—" : Number(n).toLocaleString(locale, { maximumFractionDigits: d || 0, minimumFractionDigits: d || 0 });
 
-    // Routeur hors tension / intégration pas encore chargée : AUCUNE entité.
-    // On affiche une carte propre au lieu de laisser quoi que ce soit planter.
+    // Re-render only when one of OUR entities changed (set hass fires for every state change
+    // in Home Assistant, several times per second).
+    const sig = lang + "|" + eids.map((e) => { const s = this._st(e); return e + ":" + (s ? s.last_updated + s.state : ""); }).join("|");
+    if (sig === this._sig) return;
+    this._sig = sig;
+
     if (!eids.length) {
       this._root.innerHTML = `<style>${STYLE}</style>
         <ha-card><div class="wrap">
-          <div class="head">${LOGO}<div><div class="title">Routeur F1ATB</div>
-            <div class="sub"><span class="dot off"></span>Indisponible</div></div></div>
-          <div class="empty">Le routeur ne répond pas (hors tension ?).<br>La carte se remplit dès qu'il est joignable.</div>
+          <div class="head">${LOGO}<div><div class="title">${t.router}</div>
+            <div class="sub"><span class="dot off"></span>${t.unavailable}</div></div></div>
+          <div class="empty">${t.noAnswer}</div>
         </div></ha-card>`;
       return;
     }
 
     const globals = {};
     const actions = {}; // index -> {kind: eid}
-    let routerName = "Routeur F1ATB";
     for (const eid of eids) {
-      const s = this._st(eid);
-      if (!s) continue;
-      const a = s.attributes || {};
-      if (a.action_index !== undefined && a.action_index !== null) {
-        const i = a.action_index;
-        (actions[i] = actions[i] || { name: a.action_name })[a.f1atb_kind] = eid;
-        if (a.action_name) actions[i].name = a.action_name;
-      } else if (a.f1atb_kind) {
-        globals[a.f1atb_kind] = eid;
+      const m = meta[eid];
+      if (m.index !== undefined && m.index !== null) {
+        const A = (actions[m.index] = actions[m.index] || {});
+        A[m.kind] = eid;
+        if (m.name) A.name = m.name;
+      } else {
+        globals[m.kind] = eid;
       }
     }
-    // nom du routeur depuis le device d'une entité (hass.entities/devices peuvent être absents)
-    const anyEid = eids[0];
+    // Router name from the device of an entity (hass.entities / devices may be missing).
+    let routerName = t.router;
     const ents = this._hass.entities || {};
     const devs = this._hass.devices || {};
-    const ent = anyEid ? ents[anyEid] : null;
+    const ent = ents[eids[0]];
     const dev = ent && ent.device_id ? devs[ent.device_id] : null;
     if (dev && dev.name_by_user) routerName = dev.name_by_user;
     else if (dev && dev.name) routerName = dev.name;
 
-    // État connecté (capteur binaire "Connecté", f1atb_kind='connected')
-    const connEid = globals.connected;
-    const online = connEid ? ((this._st(connEid) || {}).state === "on") : true;
+    const online = this._connEid ? ((this._st(this._connEid) || {}).state === "on") : true;
 
-    const kpi = (kind, label, tagVar, unit, energy) => {
-      const eid = globals[kind];
-      const s = eid ? this._st(eid) : null;
-      let v = s ? Number(s.state) : null;
+    const kpi = (kind, label, tagVar, unit) => {
+      const s = globals[kind] ? this._st(globals[kind]) : null;
+      const v = OK(s) ? Number(s.state) : null;
       return `<div class="kpi"><div class="l"><span class="tag" style="background:var(${tagVar})"></span>${label}</div>
-        <div class="v">${FMT(v, energy ? 1 : 0)}<small>${unit}</small></div></div>`;
+        <div class="v">${FMT(v, 0)}<small>${unit}</small></div></div>`;
     };
 
-    // Températures (canaux configurés) : puces triées par canal
-    const tempEids = eids
-      .filter((e) => (((this._st(e) || {}).attributes) || {}).f1atb_kind === "temperature")
-      .sort((a, b) => (this._st(a).attributes.temp_channel || 0) - (this._st(b).attributes.temp_channel || 0));
+    // Temperatures (configured channels): chips sorted by channel
+    const tempEids = eids.filter((e) => meta[e].kind === "temperature")
+      .sort((a, b) => (meta[a].ch || 0) - (meta[b].ch || 0));
     let tempHtml = "";
     if (tempEids.length) {
       tempHtml = `<div class="temps">` + tempEids.map((e) => {
         const s = this._st(e);
-        const v = Number(s.state);
-        const ch = s.attributes.temp_channel;
-        const nm = s.attributes.nom || ("Canal " + (ch === undefined || ch === null ? "?" : ch));
-        const disp = (s.state === "unavailable" || s.state === "unknown" || isNaN(v)) ? "—" : FMT(v, 1) + "°C";
+        const ch = meta[e].ch;
+        const nm = meta[e].nom || (t.channel + " " + (ch === undefined || ch === null ? "?" : ch));
+        const disp = OK(s) && !isNaN(Number(s.state)) ? FMT(Number(s.state), 1) + "°C" : "—";
         return `<div class="tchip">🌡<span class="tn">${ESC(nm)}</span><span class="tv">${disp}</span></div>`;
       }).join("") + `</div>`;
     }
@@ -200,77 +280,72 @@ class F1atbCard extends HTMLElement {
     const actIdx = Object.keys(actions).map(Number).sort((a, b) => a - b);
     let actionsHtml = "";
     if (actIdx.length === 0) {
-      actionsHtml = online
-        ? `<div class="empty">Aucune action active.<br>Activez une action sur le routeur pour la piloter ici.</div>`
-        : `<div class="empty">Routeur hors ligne.<br>Les commandes réapparaîtront à la remise sous tension.</div>`;
+      actionsHtml = `<div class="empty">${online ? t.noAction : t.offlineActions}</div>`;
     }
     for (const i of actIdx) {
       const A = actions[i];
       const ouvS = A.ouverture ? this._st(A.ouverture) : null;
-      const ouv = ouvS ? Number(ouvS.state) : null;
+      const ouv = OK(ouvS) ? Number(ouvS.state) : null;
       const fondeS = A.forme_onde ? this._st(A.forme_onde) : null;
       const omS = A.ouverture_max ? this._st(A.ouverture_max) : null;
       const forcS = A.forcage ? this._st(A.forcage) : null;
+      const autoS = A.auto_ouverture_max ? this._st(A.auto_ouverture_max) : null;
 
-      // forme d'onde : segmented
+      // waveform: segmented buttons (options already in the chosen language)
       let ondeHtml = "";
-      if (fondeS) {
+      if (OK(fondeS)) {
         const opts = fondeS.attributes.options || [];
-        ondeHtml = `<div class="row"><div class="lab"><span>Forme d'onde</span></div><div class="seg" data-role="onde" data-eid="${A.forme_onde}">` +
+        ondeHtml = `<div class="row"><div class="lab"><span>${t.waveform}</span></div><div class="seg" data-eid="${A.forme_onde}">` +
           opts.map((o) => `<button class="${o === fondeS.state ? "on" : ""}" data-opt="${ESC(o)}">${ESC(o)}</button>`).join("") + `</div></div>`;
       }
-      // ouverture max en routage AUTO (triac) : slider
+      // max opening in AUTO routing: slider
       let autoHtml = "";
-      const autoS = A.auto_ouverture_max ? this._st(A.auto_ouverture_max) : null;
-      if (autoS) {
+      if (OK(autoS)) {
         const av = Number(autoS.state);
-        autoHtml = `<div class="row"><div class="lab"><span>Ouverture max (Auto)</span><span class="hint2">routage normal</span></div>
+        autoHtml = `<div class="row"><div class="lab"><span>${t.autoMax}</span><span class="hint2">${t.autoHint}</span></div>
           <div class="slider"><input type="range" min="0" max="100" step="1" value="${av}" data-role="om" data-eid="${A.auto_ouverture_max}">
           <span class="val">${FMT(av)}%</span></div></div>`;
       }
-      // ouverture appliquée en MARCHE FORCÉE (ForceOuvre) : slider
+      // opening applied while FORCED ON (ForceOuvre): slider
       let omHtml = "";
-      if (omS) {
+      if (OK(omS)) {
         const val = Number(omS.state);
-        omHtml = `<div class="row"><div class="lab"><span>Ouverture (marche forcée)</span><span class="hint2">si forcé</span></div>
+        omHtml = `<div class="row"><div class="lab"><span>${t.forcedOpening}</span><span class="hint2">${t.forcedHint}</span></div>
           <div class="slider"><input type="range" min="0" max="100" step="1" value="${val}" data-role="om" data-eid="${A.ouverture_max}">
           <span class="val">${FMT(val)}%</span></div></div>`;
       }
-      // forçage : Auto / Marche / Arrêt
+      // override: auto / forced on / forced off. data-opt = the entity's REAL option;
+      // meaning and style come from the option index, so it works in every language.
       let forcHtml = "";
-      if (forcS) {
-        const cur = forcS.state;
-        // data-opt = la VRAIE option de l'entité (ex. "Forcé Marche") ; on n'affiche qu'un libellé lisible.
-        const FORC_LABEL = { "Auto": "Auto", "Forcé Marche": "Marche forcée", "Forcé Arrêt": "Arrêt forcé" };
-        const FORC_CLS = { "Forcé Marche": "marche", "Forcé Arrêt": "arret" };
-        const opts = forcS.attributes.options || ["Auto", "Forcé Marche", "Forcé Arrêt"];
-        forcHtml = `<div class="row"><div class="lab"><span>Forçage</span></div><div class="seg forc" data-role="forc" data-eid="${A.forcage}">` +
-          opts.map((v) => `<button class="${cur === v ? "on " + (FORC_CLS[v] || "") : ""}" data-opt="${ESC(v)}">${ESC(FORC_LABEL[v] || v)}</button>`).join("") + `</div></div>`;
+      if (OK(forcS)) {
+        const opts = forcS.attributes.options || [];
+        forcHtml = `<div class="row"><div class="lab"><span>${t.override}</span></div><div class="seg forc" data-eid="${A.forcage}">` +
+          opts.map((v, k) => `<button class="${forcS.state === v ? "on " + (OVERRIDE_CLS[k] || "") : ""}" data-opt="${ESC(v)}">${ESC(t.overrideLabels[k] || v)}</button>`).join("") + `</div></div>`;
       }
 
-      // marche forcée à une puissance donnée (l'ouverture est calculée automatiquement)
+      // forced on at a given power (the opening is computed automatically)
       let mfHtml = "";
       const mfS = A.marche_forcee_w ? this._st(A.marche_forcee_w) : null;
-      if (mfS) {
+      if (OK(mfS)) {
         const pmaxS = A.puissance_max ? this._st(A.puissance_max) : null;
-        const pmax = (pmaxS ? Number(pmaxS.state) : Number(mfS.attributes.puissance_max)) || 3000;
-        const calibrating = !!(pmaxS && pmaxS.attributes && pmaxS.attributes.calibrating);
+        const pmax = (OK(pmaxS) ? Number(pmaxS.state) : Number(mfS.attributes.puissance_max)) || 3000;
+        const calibrating = !!(OK(pmaxS) && pmaxS.attributes.calibrating);
         const mfVal = Number(mfS.state) || 0;
         const op = pmax ? Math.max(0, Math.min(100, Math.round(mfVal / pmax * 100))) : 0;
         const calBtn = A.calibrer
-          ? `<button class="cal ${calibrating ? "busy" : ""}" data-role="cal" data-eid="${A.calibrer}" ${calibrating ? "disabled" : ""}>${calibrating ? "Calibration…" : "⚙ Calibrer"}</button>`
+          ? `<button class="cal ${calibrating ? "busy" : ""}" data-role="cal" data-eid="${A.calibrer}" ${calibrating ? "disabled" : ""}>${calibrating ? t.calibrating : t.calibrate}</button>`
           : ``;
-        mfHtml = `<div class="row"><div class="lab"><span>Marche forcée à une puissance</span><span class="hint" data-role="mfpct">→ ${op} %</span></div>
+        mfHtml = `<div class="row"><div class="lab"><span>${t.forcedPower}</span><span class="hint" data-role="mfpct">→ ${op} %</span></div>
           <div class="pwr">
             <input type="number" inputmode="numeric" min="0" max="${pmax}" step="50" value="${mfVal}" data-role="mfw" data-eid="${A.marche_forcee_w}" data-pmax="${pmax}"><span class="u">W</span>
-            <button class="ghost" data-role="mfauto" data-eid="${A.marche_forcee_w}" title="Remettre à 0 (retour Auto)">Effacer</button>
+            <button class="ghost" data-role="mfauto" data-eid="${A.marche_forcee_w}" title="${t.clearTitle}">${t.clear}</button>
           </div>`
-          + (A.puissance_max ? `<div class="pmax">Puissance max de l'appareil <input type="number" inputmode="numeric" min="0" step="50" value="${pmax}" data-role="pmax" data-eid="${A.puissance_max}"><span class="u">W</span>${calBtn}</div>` : ``)
+          + (A.puissance_max ? `<div class="pmax">${t.maxPower} <input type="number" inputmode="numeric" min="0" step="50" value="${pmax}" data-role="pmax" data-eid="${A.puissance_max}"><span class="u">W</span>${calBtn}</div>` : ``)
           + `</div>`;
       }
 
       actionsHtml += `<div class="act">
-        <div class="top"><div class="nm">${ESC(A.name || "Action " + i)}</div><div class="ouv">${ouv == null ? "" : FMT(ouv) + " %"}</div></div>
+        <div class="top"><div class="nm">${ESC(A.name || t.action + " " + i)}</div><div class="ouv">${ouv == null ? "" : FMT(ouv) + " %"}</div></div>
         <div class="bar"><i style="width:${Math.max(0, Math.min(100, ouv || 0))}%"></i></div>
         ${ondeHtml}${autoHtml}${forcHtml}${omHtml}${mfHtml}
       </div>`;
@@ -279,11 +354,11 @@ class F1atbCard extends HTMLElement {
     this._root.innerHTML = `<style>${STYLE}</style>
       <ha-card><div class="wrap">
         <div class="head">${LOGO}<div><div class="title">${ESC(routerName)}</div>
-          <div class="sub"><span class="dot ${online ? "on" : "off"}"></span>${online ? "En ligne" : "Hors ligne"}</div></div></div>
+          <div class="sub"><span class="dot ${online ? "on" : "off"}"></span>${online ? t.online : t.offline}</div></div></div>
         <div class="kpis">
-          ${kpi("grid_import_power", "Soutirée", "--imp", "W", false)}
-          ${kpi("grid_export_power", "Injectée", "--exp", "W", false)}
-          ${kpi("routed_power", "Routée", "--triac", "W", false)}
+          ${kpi("grid_import_power", t.grid_import, "--imp", "W")}
+          ${kpi("grid_export_power", t.grid_export, "--exp", "W")}
+          ${kpi("routed_power", t.routed, "--triac", "W")}
         </div>
         ${tempHtml}
         ${actionsHtml}
@@ -293,8 +368,8 @@ class F1atbCard extends HTMLElement {
   }
 
   _bind() {
-    // Selects segmentés (forme d'onde + forçage)
-    this._root.querySelectorAll('.seg').forEach((seg) => {
+    // Segmented selects (waveform + override)
+    this._root.querySelectorAll(".seg").forEach((seg) => {
       const eid = seg.getAttribute("data-eid");
       seg.querySelectorAll("button").forEach((b) => {
         b.onclick = () => {
@@ -302,7 +377,7 @@ class F1atbCard extends HTMLElement {
         };
       });
     });
-    // Sliders ouverture max
+    // Opening sliders
     this._root.querySelectorAll('input[data-role="om"]').forEach((sl) => {
       const eid = sl.getAttribute("data-eid");
       const val = sl.parentElement.querySelector(".val");
@@ -311,7 +386,7 @@ class F1atbCard extends HTMLElement {
         this._hass.callService("number", "set_value", { entity_id: eid, value: Number(sl.value) });
       };
     });
-    // Marche forcée (W) : l'ouverture % s'affiche en direct, l'écriture force la marche
+    // Forced-on power (W): the opening % updates live, writing forces the routing on
     this._root.querySelectorAll('input[data-role="mfw"]').forEach((inp) => {
       const eid = inp.getAttribute("data-eid");
       const pmax = Number(inp.getAttribute("data-pmax")) || 3000;
@@ -322,12 +397,12 @@ class F1atbCard extends HTMLElement {
         if (pct) pct.textContent = "→ " + op + " %";
       };
       inp.onchange = () => {
-        const v = Math.min(pmax, Math.max(0, Number(inp.value) || 0));  // borne à la puissance max
+        const v = Math.min(pmax, Math.max(0, Number(inp.value) || 0)); // capped at the max power
         inp.value = v;
         this._hass.callService("number", "set_value", { entity_id: eid, value: v });
       };
     });
-    // Bouton Auto : arrête la marche forcée (remet 0)
+    // Clear: ends the forced-on (sets 0)
     this._root.querySelectorAll('button[data-role="mfauto"]').forEach((b) => {
       const eid = b.getAttribute("data-eid");
       b.onclick = () => {
@@ -339,14 +414,14 @@ class F1atbCard extends HTMLElement {
         this._hass.callService("number", "set_value", { entity_id: eid, value: 0 });
       };
     });
-    // Saisie MANUELLE de la puissance max de l'appareil
+    // MANUAL entry of the appliance max power
     this._root.querySelectorAll('input[data-role="pmax"]').forEach((inp) => {
       const eid = inp.getAttribute("data-eid");
       inp.onchange = () => {
         this._hass.callService("number", "set_value", { entity_id: eid, value: Math.max(0, Number(inp.value) || 0) });
       };
     });
-    // Bouton Calibrer : lance la mesure auto de la puissance max
+    // Calibrate: automatic measurement of the max power
     this._root.querySelectorAll('button[data-role="cal"]').forEach((b) => {
       const eid = b.getAttribute("data-eid");
       b.onclick = () => {
@@ -360,17 +435,17 @@ class F1atbCard extends HTMLElement {
   static getStubConfig() { return {}; }
 }
 
-// Enregistrement IDEMPOTENT. Le fichier peut être chargé DEUX fois : automatiquement par
-// l'intégration (add_extra_js_url) ET via une ressource Lovelace ajoutée à la main.
-// Sans ce garde, customElements.define() lève « already defined », le module plante et le
-// frontend (surtout l'appli mobile) affiche « impossible de charger l'application ».
+// IDEMPOTENT registration. The file may be loaded TWICE: automatically by the integration
+// (add_extra_js_url) AND through a manually added Lovelace resource. Without this guard,
+// customElements.define() throws "already defined", the module crashes and the frontend
+// (especially the mobile app) shows "unable to load the application".
 if (customElements.get("f1atb-card")) {
-  // Déjà défini : une AUTRE copie du fichier a été chargée avant (typiquement une vieille
-  // ressource Lovelace manuelle `/local/f1atb-card.js` figée, que HACS ne met jamais à jour).
+  // Already defined: ANOTHER copy was loaded first (typically an old manual Lovelace
+  // resource `/local/f1atb-card.js` that HACS never updates).
   console.warn(
-    `[f1atb-card] v${F1ATB_CARD_VERSION} ignorée : « f1atb-card » est déjà défini par un autre fichier. ` +
-    `Supprimez la ressource Lovelace manuelle (Paramètres → Tableaux de bord → Ressources) ` +
-    `et le fichier /config/www/f1atb-card.js : l'intégration charge la carte automatiquement.`
+    `[f1atb-card] v${F1ATB_CARD_VERSION} ignored: "f1atb-card" is already defined by another file. ` +
+    `Remove the manual Lovelace resource (Settings → Dashboards → Resources) ` +
+    `and /config/www/f1atb-card.js: the integration loads the card automatically.`
   );
 } else {
   customElements.define("f1atb-card", F1atbCard);
@@ -379,7 +454,7 @@ if (customElements.get("f1atb-card")) {
     window.customCards.push({
       type: "f1atb-card",
       name: "F1ATB Solar Router",
-      description: "Carte interactive pour piloter le routeur solaire F1ATB (forme d'onde, ouverture max, forçage, marche forcée à une puissance donnée).",
+      description: "Interactive card to control the F1ATB solar router (waveform, max opening, override, forced on at a given power).",
       preview: true,
     });
   }

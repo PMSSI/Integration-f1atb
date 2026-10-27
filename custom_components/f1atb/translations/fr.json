@@ -3,8 +3,11 @@
     "step": {
       "user": {
         "title": "Routeur solaire F1ATB",
-        "description": "Adresse IP ou nom d'hôte du routeur (ex. {exemple}).",
-        "data": { "host": "Hôte" }
+        "description": "Adresse IP ou nom d'hôte du routeur (ex. {example}).",
+        "data": {
+          "host": "Hôte",
+          "language": "Langue des noms d'entités et de la carte"
+        }
       }
     },
     "error": { "cannot_connect": "Connexion impossible au routeur." },
@@ -15,9 +18,19 @@
       "init": {
         "title": "Options",
         "data": {
+          "language": "Langue des noms d'entités et de la carte",
           "scan_interval": "Intervalle d'interrogation (s)",
-          "force_minutes": "Durée d'un forçage (minutes)"
+          "force_minutes": "Durée d'un forçage marche/arrêt (minutes)"
         }
+      }
+    }
+  },
+  "selector": {
+    "language": {
+      "options": {
+        "auto": "Automatique (langue de Home Assistant)",
+        "fr": "Français",
+        "en": "English"
       }
     }
   }

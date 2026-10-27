@@ -1,4 +1,4 @@
-"""Constantes de l'intégration F1ATB Solar Router."""
+"""Constants for the F1ATB Solar Router integration."""
 from __future__ import annotations
 
 DOMAIN = "f1atb"
@@ -6,12 +6,14 @@ DOMAIN = "f1atb"
 CONF_HOST = "host"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_FORCE_MINUTES = "force_minutes"
+CONF_LANGUAGE = "language"
 
-DEFAULT_SCAN_INTERVAL = 5  # secondes
-DEFAULT_FORCE_MINUTES = 720  # durée d'un forçage (Marche/Arrêt) en minutes = 12 h
+DEFAULT_SCAN_INTERVAL = 5  # seconds
+DEFAULT_FORCE_MINUTES = 720  # duration of a forced on/off, in minutes (12 h)
 
-# Modes de forçage exposés (select)
-MODE_AUTO = "Auto"
-MODE_ON = "Forcé Marche"
-MODE_OFF = "Forcé Arrêt"
-FORCE_MODES = [MODE_AUTO, MODE_ON, MODE_OFF]
+LANGUAGE_AUTO = "auto"  # follow the Home Assistant language
+LANGUAGES = [LANGUAGE_AUTO, "fr", "en"]
+
+# Consecutive failed polls tolerated before the router is reported offline
+# (a busy ESP32 or a Wi-Fi blip must not make every entity unavailable).
+FAILURES_BEFORE_OFFLINE = 3
