@@ -8,7 +8,7 @@
  * copy this file to <config>/www/ and add the resource  /local/f1atb-card.js  (JavaScript module).
  * Then in a view, add a card:  type: custom:f1atb-card
  */
-const F1ATB_CARD_VERSION = "0.6.0";
+const F1ATB_CARD_VERSION = "0.6.1";
 
 const LOGO = `
 <svg viewBox="44 60 186 128" class="logo">

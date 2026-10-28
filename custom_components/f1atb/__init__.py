@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+import hashlib
 import logging
 from pathlib import Path
 
@@ -30,6 +31,34 @@ CARD_URL = f"/{DOMAIN}/f1atb-card.js"
 SERVICE_SET_TANK_CHARGE = "set_tank_charge"
 
 
+def _file_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:8]
+
+
+async def _upsert_lovelace_resource(hass: HomeAssistant, url: str) -> None:
+    """Declare the card as a dashboard resource too (storage mode), updated in place on each version.
+
+    Dashboards load their resources themselves, which the mobile app does more reliably than the
+    extra JS URLs (a phone kept showing "configuration error" with only the latter).
+    """
+    lovelace = hass.data.get("lovelace")
+    resources = getattr(lovelace, "resources", None)
+    if resources is None and isinstance(lovelace, dict):
+        resources = lovelace.get("resources")
+    if resources is None or not hasattr(resources, "async_create_item"):
+        return  # YAML mode: resources are managed by the user
+    if not getattr(resources, "loaded", True):
+        await resources.async_load()
+        resources.loaded = True
+    base = url.split("?")[0]
+    for item in resources.async_items():
+        if item.get("url", "").split("?")[0] == base:
+            if item["url"] != url:
+                await resources.async_update_item(item["id"], {"res_type": "module", "url": url})
+            return
+    await resources.async_create_item({"res_type": "module", "url": url})
+
+
 async def _register_card(hass: HomeAssistant) -> None:
     """Serve the Lovelace card and load it automatically (available in the visual editor)."""
     if hass.data.get(f"{DOMAIN}_card"):
@@ -38,15 +67,20 @@ async def _register_card(hass: HomeAssistant) -> None:
     try:
         from homeassistant.components.http import StaticPathConfig
 
+        # Cached like the HACS cards: the URL carries a hash of the file, so any change gives a new
+        # URL and no browser (nor the mobile app, which keeps stale copies for days) runs an old card.
         await hass.http.async_register_static_paths(
-            [StaticPathConfig(CARD_URL, str(card), False)]
+            [StaticPathConfig(CARD_URL, str(card), True)]
         )
+        version = (await async_get_integration(hass, DOMAIN)).version
+        url = f"{CARD_URL}?v={version}-{await hass.async_add_executor_job(_file_hash, card)}"
         from homeassistant.components.frontend import add_extra_js_url
 
-        # ?v= makes browsers and the mobile app reload the card after an update
-        # (otherwise phones can keep running an old card for days).
-        version = (await async_get_integration(hass, DOMAIN)).version
-        add_extra_js_url(hass, f"{CARD_URL}?v={version}")
+        add_extra_js_url(hass, url)
+        try:
+            await _upsert_lovelace_resource(hass, url)
+        except Exception as err:  # noqa: BLE001 - the extra JS URL above still loads the card
+            _LOGGER.debug("Card not declared as a dashboard resource: %s", err)
         # Flagged only on success: a failure is retried at the next setup.
         hass.data[f"{DOMAIN}_card"] = True
     except Exception as err:  # noqa: BLE001 - non-blocking: the integration works without the card
