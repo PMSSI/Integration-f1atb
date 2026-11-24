@@ -26,6 +26,7 @@ KWH_PER_L_K = WH_PER_L_K / 1000
 FULL_OPENING_MIN = 10  # % — the router wants to route
 FULL_POWER_MAX = 30  # W — …but the heater draws (almost) nothing
 FULL_SECONDS = 180  # sustained for 3 minutes
+HEAT_CEILING = 0.99  # heating alone never shows more than 99 %: 100 % = thermostat cut seen
 LEARN_MIN_DAYS = 0.5  # shorter intervals carry too little information
 LEARN_RATE = 0.5
 MAX_STEP_S = 86400  # never integrate more than a day at once (HA downtime)
@@ -124,7 +125,10 @@ class TankModel:
         draws = self.usage_l_day * KWH_PER_L_K * self.delta_t(doy) * PROFILE[now.hour] * hours
         heat = energy_wh / 1000 if energy_wh is not None else max(0.0, power_w) / 1000 * hours
         d_e = heat - losses - draws
-        self.energy = min(cap, max(0.0, self.energy + d_e))
+        new = self.energy + d_e
+        if d_e > 0:  # a tank that still takes power is not full: only the thermostat cut (_anchor) sets 100 %
+            new = min(new, max(self.energy, HEAT_CEILING * cap))
+        self.energy = min(cap, max(0.0, new))
         self.free += d_e
 
         if wants_to_route and power_w < FULL_POWER_MAX:

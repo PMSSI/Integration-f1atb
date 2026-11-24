@@ -50,6 +50,16 @@ def test_heating_raises_charge_and_draws_lower_it():
     assert before - m.energy > 0.3
 
 
+def test_still_heating_is_never_100():
+    m = wh.TankModel(300, 60); m.step(T0, 0, False)
+    t, _ = run(m, T0, 240, power_w=3000)  # far more than the room left: the model is ahead of the real tank
+    assert abs(m.percent(293) - 99) < 1e-6 and not m.full_now
+    t, detected = run(m, t, 3, power_w=5, wants=True)  # thermostat cut
+    assert detected and abs(m.percent(293) - 100) < 1e-6
+    t, _ = run(m, t, 10, power_w=0, wants=False)  # router closed after the cut: no jump down to 99 %
+    assert 99.5 < m.percent(293) < 100  # only the small draws and losses
+
+
 def test_learning_corrects_usage_in_the_right_direction():
     for real_extra, sign in ((+2.0, +1), (-2.0, -1)):
         m = wh.TankModel(300, 60, usage_l_day=40); m.step(T0, 0, False)
